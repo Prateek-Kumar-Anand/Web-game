@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#050508">
+<link rel="manifest" href="manifest.json">
+<title>IRON SLUG — City Warfare</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- Rotate-device notice (portrait mode on small screens) -->
+<div id="rotate-notice">
+  <div>📱 ➜ 🔄</div>
+  <div>PLEASE ROTATE YOUR<br>DEVICE TO LANDSCAPE</div>
+</div>
+
+<div id="wrap">
+
+  <!-- Loading screen -->
+  <div id="loading">
+    <div class="lt">⚡ IRON SLUG ⚡</div>
+    <div id="load-bar-bg"><div id="load-bar"></div></div>
+    <div id="load-pct">LOADING ASSETS… 0%</div>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud">
+    <canvas id="portrait" width="34" height="34"></canvas>
+    <div>
+      <div class="hl">PLAYER</div>
+      <div class="hv" id="char-nm">BIKER</div>
+    </div>
+    <div id="hp-outer">
+      <img id="hp-bg-img" src="" alt="">
+      <div id="hp-fill" style="width:106px"></div>
+    </div>
+    <div>
+      <div class="hl">SCORE</div>
+      <div id="score-el">000000</div>
+    </div>
+    <div>
+      <div class="hl">LIVES</div>
+      <div id="lives-el">♥♥♥</div>
+    </div>
+    <div>
+      <div class="hl">STAGE</div>
+      <div id="lvl-el">1-1</div>
+    </div>
+    <div id="ammo-wrap">
+      <img id="gun-icon" src="" alt="">
+      <div>
+        <div class="hl">AMMO</div>
+        <div id="ammo-el">30</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Game stage -->
+  <div id="stage">
+    <canvas id="gc" width="800" height="450"></canvas>
+
+    <!-- Overlay: title / char-select / game-over -->
+    <div id="ov" style="display:none">
+      <div class="ov-title" style="color:#f5c518;text-shadow:3px 3px 0 #5a2a00,0 0 28px #f5c51866">⚡ IRON SLUG ⚡</div>
+      <div class="ov-sub">CHOOSE YOUR FIGHTER — TAKE BACK THE CITY</div>
+      <div id="cs-row">
+        <div class="cs sel" data-char="biker">
+          <canvas id="pr-biker" width="56" height="56"></canvas>
+          <div class="cs-nm">BIKER</div>
+          <div class="cs-stat">SPD ████░<br>HP &nbsp;███░░<br>ATK ████░</div>
+        </div>
+        <div class="cs" data-char="punk">
+          <canvas id="pr-punk" width="56" height="56"></canvas>
+          <div class="cs-nm">PUNK</div>
+          <div class="cs-stat">SPD █████<br>HP &nbsp;██░░░<br>ATK ███░░</div>
+        </div>
+        <div class="cs" data-char="cyborg">
+          <canvas id="pr-cyborg" width="56" height="56"></canvas>
+          <div class="cs-nm">CYBORG</div>
+          <div class="cs-stat">SPD ███░░<br>HP &nbsp;█████<br>ATK █████</div>
+        </div>
+      </div>
+      <button class="ov-btn" id="start-btn" style="color:#f5c518">► INSERT COIN</button>
+      <div class="ov-sub" style="font-size:6px;color:#444">KEYBOARD: ← → MOVE · Z JUMP · X ATTACK &nbsp;|&nbsp; MOBILE: ON-SCREEN PAD</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Scripts ─────────────────────────────────────────────────────────────── -->
+<script src="js/loader.js"></script>
+<script src="js/sprite.js"></script>
+<script src="js/touch.js"></script>
+<script src="js/game.js"></script>
+<script>
+'use strict';
+
+let selectedCharGlobal = 'biker';
+
+function fitCanvas() {
+  const stage = document.getElementById('stage');
+  const canvas = document.getElementById('gc');
+  const ratio = 800 / 450;
+  let w = stage.clientWidth, h = stage.clientHeight;
+  if (w / h > ratio) { w = h * ratio; } else { h = w / ratio; }
+  canvas.style.width  = w + 'px';
+  canvas.style.height = h + 'px';
+}
+window.addEventListener('resize', fitCanvas);
+window.addEventListener('orientationchange', () => setTimeout(fitCanvas, 200));
+
+function initCharSelect() {
+  document.querySelectorAll('.cs').forEach(card => {
+    card.addEventListener('click', () => {
+      document.querySelectorAll('.cs').forEach(c => c.classList.remove('sel'));
+      card.classList.add('sel');
+      selectedCharGlobal = card.dataset.char;
+    });
+  });
+}
+
+function drawCharPreviews() {
+  const list = [['biker', 'pr-biker'], ['punk', 'pr-punk'], ['cyborg', 'pr-cyborg']];
+  const t = Date.now();
+  for (const [cid, canvasId] of list) {
+    const c = document.getElementById(canvasId);
+    if (!c) continue;
+    const cx = c.getContext('2d');
+    cx.imageSmoothingEnabled = false;
+    cx.clearRect(0, 0, 56, 56);
+    const im = window.IMG[cid + '_idle'];
+    if (im && im.complete && im.naturalWidth) {
+      const fr = Math.floor(t / 180) % 4;
+      cx.drawImage(im, fr * 48, 0, 48, 48, 0, 0, 56, 56);
+    }
+  }
+  requestAnimationFrame(drawCharPreviews);
+}
+
+document.getElementById('start-btn').addEventListener('click', () => {
+  document.getElementById('ov').style.display = 'none';
+  window.startGame(selectedCharGlobal);
+});
+
+initCharSelect();
+fitCanvas();
+
+window.loadAssets(
+  (pct) => {
+    document.getElementById('load-bar').style.width = pct + '%';
+    document.getElementById('load-pct').textContent = 'LOADING ASSETS… ' + pct + '%';
+  },
+  () => {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('ov').style.display = 'flex';
+    drawCharPreviews();
+    fitCanvas();
+  }
+);
+
+// Register service worker for offline play (only works when served over http/https)
+if ('serviceWorker' in navigator && (location.protocol === 'http:' || location.protocol === 'https:')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {
+      // Silently ignore — game still works fine without offline caching
+    });
+  });
+}
+
+</script>
+</body>
+</html>

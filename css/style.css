@@ -1,0 +1,144 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  background: #050508;
+  width: 100%; height: 100%;
+  overflow: hidden;
+  font-family: 'Press Start 2P', monospace;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
+#wrap {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+}
+
+/* ── HUD bar ─────────────────────────────────────────────────────────────── */
+#hud {
+  background: #06060f;
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 2px solid #1a1a3a;
+  flex-wrap: wrap;
+  min-height: 44px;
+  flex-shrink: 0;
+}
+.hl { font-size: 6px; color: #444; letter-spacing: 1px; margin-bottom: 2px; }
+.hv { font-size: 8px; color: #f5c518; text-shadow: 0 0 6px #f5c51855; }
+
+#portrait {
+  width: 34px; height: 34px;
+  image-rendering: pixelated;
+  border: 1px solid #2a2a4a;
+  background: #000;
+  flex-shrink: 0;
+}
+
+#hp-outer { position: relative; width: 130px; height: 20px; image-rendering: pixelated; flex-shrink: 0; }
+#hp-bg-img { position: absolute; top: 0; left: 0; width: 130px; height: 20px; image-rendering: pixelated; }
+#hp-fill {
+  position: absolute; top: 6px; left: 12px;
+  height: 8px; max-width: 106px;
+  background: linear-gradient(to right, #c00, #f80, #ff0);
+  transition: width .1s;
+}
+
+#score-el { font-size: 9px; color: #f5c518; text-shadow: 0 0 8px #f5c51866; min-width: 80px; }
+#lives-el { color: #f55; font-size: 9px; }
+#lvl-el   { color: #80ffaa; font-size: 8px; }
+
+#ammo-wrap { display: flex; align-items: center; gap: 5px; }
+#gun-icon  { width: 24px; height: 24px; image-rendering: pixelated; }
+#ammo-el   { font-size: 8px; color: #f5c518; }
+
+/* ── Game canvas area ────────────────────────────────────────────────────── */
+#stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+canvas#gc {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  object-fit: contain;
+}
+
+/* ── Overlay (start / game-over / char select) ──────────────────────────── */
+#ov {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 2, 10, 0.93);
+  z-index: 30;
+  gap: 14px;
+  padding: 16px;
+  text-align: center;
+}
+.ov-title { font-size: clamp(18px, 5vw, 26px); letter-spacing: 3px; line-height: 1.5; }
+.ov-sub   { font-size: 8px; color: #888; line-height: 2.1; }
+.ov-btn {
+  background: transparent;
+  border: 3px solid currentColor;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 10px;
+  padding: 12px 26px;
+  cursor: pointer;
+  letter-spacing: 2px;
+  transition: all .15s;
+}
+.ov-btn:active { opacity: 0.7; box-shadow: 0 0 18px currentColor; }
+
+#cs-row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.cs {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  cursor: pointer; padding: 8px 10px; border: 2px solid #222;
+  transition: all .18s;
+}
+.cs.sel, .cs:active { border-color: #f5c518; background: rgba(245,197,24,.08); }
+.cs canvas { image-rendering: pixelated; }
+.cs-nm { font-size: 7px; color: #888; }
+.cs.sel .cs-nm { color: #f5c518; }
+.cs-stat { font-size: 5px; color: #556; line-height: 1.7; }
+
+/* ── Loading screen ──────────────────────────────────────────────────────── */
+#loading {
+  position: absolute; inset: 0; z-index: 50;
+  background: #050508;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px;
+}
+#loading .lt { font-size: 16px; color: #f5c518; letter-spacing: 2px; text-shadow: 0 0 16px #f5c51866; }
+#load-bar-bg { width: 70%; max-width: 320px; height: 14px; border: 2px solid #f5c518; background: #111; }
+#load-bar { height: 100%; width: 0%; background: linear-gradient(to right,#f5c518,#ff8000); transition: width .15s; }
+#load-pct { font-size: 8px; color: #888; }
+
+/* ── Orientation notice (portrait warning) ──────────────────────────────── */
+#rotate-notice {
+  position: fixed; inset: 0; z-index: 100;
+  background: #000; color: #f5c518;
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; text-align: center; padding: 20px; font-size: 10px; line-height: 2;
+}
+@media (orientation: portrait) and (max-width: 900px) {
+  #rotate-notice { display: flex; }
+  #wrap { display: none; }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Iron Slug — City Warfare",
+  "short_name": "Iron Slug",
+  "description": "Retro 2D side-scrolling run & gun action game",
+  "start_url": "./index.html",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#050508",
+  "theme_color": "#050508",
+  "icons": [
+    {
+      "src": "assets/sprites/biker/idle.png",
+      "sizes": "48x48",
+      "type": "image/png"
+    }
+  ]
+}
