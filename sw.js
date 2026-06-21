@@ -6,7 +6,7 @@
  * spotty connections, or "Add to Home Screen" installs).
  */
 
-const CACHE_NAME = 'iron-slug-v1';
+const CACHE_NAME = 'iron-slug-v2';
 
 const APP_SHELL = [
   '/',
@@ -107,6 +107,10 @@ const GAME_ASSETS = [
   '/assets/ui/hp_frame.png',
   '/assets/ui/hp_red.png',
   '/assets/ui/hp_yellow.png',
+  '/assets/bosses/cyprus_cocopta/idle.png',
+  '/assets/bosses/cyprus_cocopta/run.png',
+  '/assets/bosses/cyprus_cocopta/attack.png',
+  '/assets/bosses/cyprus_cocopta/hurt.png',
 ];
 
 const ALL_FILES = [...APP_SHELL, ...GAME_ASSETS];

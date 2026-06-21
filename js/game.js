@@ -2,6 +2,14 @@
 /**
  * IRON SLUG – Game Engine
  * Side-scrolling run & gun for Android / mobile browsers.
+ *
+ * STAGE STRUCTURE (per game_instructions.txt):
+ *   Level 1 — Rooftop
+ *     1-1: basic enemies, ends at a stop-point, triggers next-stage load
+ *     1-2: enemy swarm + narrow ledges / fall-hazard gaps
+ *     1-3: boss fight — Cyprus-Cocopta
+ *   Level 2 — Desert   (not yet built)
+ *   Level 3 — Hell     (not yet built)
  */
 
 /* ── Canvas & constants ───────────────────────────────────────────────────── */
@@ -10,11 +18,11 @@ const ctx = C.getContext('2d');
 ctx.imageSmoothingEnabled = false;
 
 const W = 800, H = 450;
-const TILE   = 32;
-const GND    = H - 96;       // ground surface Y
-const GRAV   = 0.52;
+const TILE    = 32;
+const GND     = H - 96;       // ground surface Y
+const GRAV    = 0.52;
 const MAXFALL = 13;
-const LEVEL_LEN = 3800;
+const PIT_DEATH_Y = H + 60;   // falling past this Y = death (used on 1-2 ledges)
 
 /* ── Global state ────────────────────────────────────────────────────────── */
 let score = 0, lives = 3, level = 1, stage = 1;
@@ -24,9 +32,11 @@ let frameN = 0, shake = 0;
 let combo = 0, comboT = 0;
 let bossSpawned = false, boss = null;
 let selectedChar = 'biker';
+let stageClearedPending = false;
+let killCount = 0;            // used by stages with a kill-gate (e.g. future 2-2)
 
-const keys  = {};          // keyboard
-const VK    = () => window.VKEYS || {};   // virtual (touch) keys
+const keys  = {};                          // keyboard
+const VK    = () => window.VKEYS || {};    // virtual (touch) keys
 
 /* ── Input helpers ───────────────────────────────────────────────────────── */
 const K = {
@@ -102,6 +112,7 @@ const bullets   = [];
 const particles = [];
 const pickups   = [];
 const platforms = [];
+const pits      = [];   // fall-hazard gaps, used in stage 1-2
 
 /* ── Player factory ──────────────────────────────────────────────────────── */
 function mkPlayer(cid) {
@@ -123,6 +134,7 @@ function mkPlayer(cid) {
     crouching: false, djumpTimer: 0,
     shootCd: 0,
     gunIdx: 1,
+    fallingToDeath: false,
   };
 }
 
@@ -173,38 +185,121 @@ function mkEnemy(x, type, archetype) {
   };
 }
 
-/* ── Level setup ─────────────────────────────────────────────────────────── */
-function setupLevel() {
-  enemies.length = bullets.length = particles.length = pickups.length = platforms.length = 0;
-  bossSpawned = false; boss = null;
-  camX = targetCamX = 0;
+/* ──────────────────────────────────────────────────────────────────────────
+   STAGE DEFINITIONS — Level 1 (Rooftop)
+   ────────────────────────────────────────────────────────────────────────── */
 
+/** 1-1: Basic enemies, ends at a stop-point (a clear "gate" the player walks
+ *       into, triggers the next-stage loading transition). */
+function buildStage_1_1() {
+  const LEN = 2600;
   const platData = [
-    [300,  GND - 72, 128], [560,  GND - 64, 112], [820,  GND - 80, 128],
-    [1100, GND - 68,  96], [1380, GND - 80, 128], [1650, GND - 60, 112],
-    [1920, GND - 76, 128], [2200, GND - 88,  96], [2500, GND - 72, 128],
-    [2780, GND - 64, 112], [3050, GND - 80,  96],
+    [300,  GND - 72, 128], [620,  GND - 64, 112], [940,  GND - 80, 128],
+    [1300, GND - 68,  96], [1620, GND - 80, 128], [1940, GND - 60, 112],
+    [2260, GND - 76, 128],
   ];
   for (const [x, y, w] of platData) platforms.push({ x, y, w, h: 24 });
 
-  // Enemy mix: mostly brawlers, with rushers and snipers sprinkled in for variety.
-  // Snipers only start appearing from stage 2 onward to ease the player in.
-  const count = 10 + level * 4;
-  for (let i = 0; i < count; i++) {
-    const x = 400 + i * 200 + Math.random() * 80;
-    const roll = Math.random();
-    let spriteType, archetype;
-    if (roll < 0.40) {
-      spriteType = 'punk'; archetype = 'brawler';
-    } else if (roll < 0.62) {
-      spriteType = 'cyborg'; archetype = 'brawler';
-    } else if (roll < 0.85) {
-      spriteType = 'punk'; archetype = 'rusher';
-    } else {
-      spriteType = 'cyborg'; archetype = level >= 2 ? 'sniper' : 'brawler';
-    }
-    enemies.push(mkEnemy(x, spriteType, archetype));
+  const spawnPts = [420, 700, 980, 1260, 1540, 1820, 2080, 2340];
+  for (const x of spawnPts) {
+    const archetype = Math.random() < 0.25 ? 'rusher' : 'brawler';
+    enemies.push(mkEnemy(x, Math.random() < 0.55 ? 'punk' : 'cyborg', archetype));
   }
+
+  return {
+    len: LEN,
+    type: 'gate',
+    gateX: LEN - 140,
+    label: 'STAGE 1-1 · ROOFTOP ENTRY',
+  };
+}
+
+/** 1-2: Enemy swarm + narrow ledges with fall-hazard gaps. "Easy but tricky" —
+ *       the danger is positioning near pits while enemies push you, not raw
+ *       enemy difficulty. */
+function buildStage_1_2() {
+  const LEN = 3000;
+
+  const groundSegments = [
+    [0,    520],
+    [620,  1050],
+    [1160, 1620],
+    [1740, 2150],
+    [2260, LEN],
+  ];
+  for (let i = 0; i < groundSegments.length - 1; i++) {
+    const gapStart = groundSegments[i][1];
+    const gapEnd   = groundSegments[i + 1][0];
+    pits.push({ x: gapStart, w: gapEnd - gapStart });
+  }
+
+  const platData = [
+    [560,  GND - 64, 80],
+    [1090, GND - 80, 90],
+    [1660, GND - 68, 90],
+    [2190, GND - 76, 90],
+  ];
+  for (const [x, y, w] of platData) platforms.push({ x, y, w, h: 24 });
+
+  const spawnPts = [340, 560, 780, 980, 1220, 1460, 1700, 1900, 2120, 2360, 2580, 2780];
+  for (const x of spawnPts) {
+    const onGround = groundSegments.some(([s, e]) => x > s + 40 && x < e - 40);
+    if (!onGround) continue;
+    const roll = Math.random();
+    const archetype = roll < 0.35 ? 'rusher' : roll < 0.55 ? 'sniper' : 'brawler';
+    enemies.push(mkEnemy(x, Math.random() < 0.5 ? 'punk' : 'cyborg', archetype));
+  }
+
+  return {
+    len: LEN,
+    type: 'gate',
+    gateX: LEN - 140,
+    label: 'STAGE 1-2 · ROOFTOP CROSSING',
+  };
+}
+
+/** 1-3: Boss fight — Cyprus-Cocopta. */
+function buildStage_1_3() {
+  const LEN = 1400;
+  const platData = [
+    [380, GND - 70, 110],
+    [900, GND - 70, 110],
+  ];
+  for (const [x, y, w] of platData) platforms.push({ x, y, w, h: 24 });
+
+  return {
+    len: LEN,
+    type: 'boss',
+    label: 'STAGE 1-3 · ROOFTOP — CYPRUS-COCOPTA',
+  };
+}
+
+const STAGE_BUILDERS = {
+  '1-1': buildStage_1_1,
+  '1-2': buildStage_1_2,
+  '1-3': buildStage_1_3,
+};
+
+let curStageDef = null; // { len, type, gateX?, label }
+
+/* ── Level/stage setup ───────────────────────────────────────────────────── */
+function setupStage() {
+  enemies.length = bullets.length = particles.length = pickups.length = 0;
+  platforms.length = 0; pits.length = 0;
+  bossSpawned = false; boss = null;
+  camX = targetCamX = 0;
+  stageClearedPending = false;
+  killCount = 0;
+
+  const key = `${level}-${stage}`;
+  const builder = STAGE_BUILDERS[key];
+  if (!builder) {
+    curStageDef = { len: 1600, type: 'gate', gateX: 1460, label: `STAGE ${key} · COMING SOON` };
+    const spawnPts = [400, 800, 1200];
+    for (const x of spawnPts) enemies.push(mkEnemy(x, 'punk', 'brawler'));
+    return;
+  }
+  curStageDef = builder();
 }
 
 /* ── State helpers ───────────────────────────────────────────────────────── */
@@ -238,13 +333,35 @@ function explodeAt(x, y, r = 30) {
   particles.push({ x, y, vx: 0, vy: 0, life: 14, max: 14, sz: r, col: '', type: 'ring' });
 }
 
+/* ── Pit / fall-hazard check ─────────────────────────────────────────────── */
+function isOverPit(x, w) {
+  for (const p of pits) {
+    if (x + w > p.x && x < p.x + p.w) return true;
+  }
+  return false;
+}
+
 /* ── Damage helpers ─────────────────────────────────────────────────────── */
 function hurtPlayer(dmg) {
   if (!player || player.inv > 0) return;
+  // Allow lethal fall-damage through even while fallingToDeath is true —
+  // this guard only blocks *additional* incidental damage (e.g. enemy
+  // bullets) while the player is already mid-fall, not the fall-death
+  // kill itself.
+  if (player.fallingToDeath && dmg < 999) return;
   player.hp -= dmg; player.inv = 75; shake = 6;
   fx(player.x + player.w / 2, player.y + player.h / 2, '#f44', 5);
   updateHUD();
-  if (player.hp <= 0) { player.hp = 0; setState(player, 'death'); player.spr.death.reset(); }
+  if (player.hp <= 0) {
+    player.hp = 0;
+    if (player.fallingToDeath) {
+      // Skip the death animation (player has fallen off-screen, nothing to
+      // show) and go straight to the life-lost flow.
+      playerDie();
+    } else {
+      setState(player, 'death'); player.spr.death.reset();
+    }
+  }
 }
 
 function hurtEnemy(e, dmg) {
@@ -255,6 +372,7 @@ function hurtEnemy(e, dmg) {
     e.curSpr = e.spr.death; e.spr.death.reset();
     score += e.type === 'cyborg' ? 300 : 150;
     combo++; comboT = 90; shake = 3;
+    killCount++;
     explodeAt(e.x + e.w / 2, e.y + e.h / 2, 25);
     if (Math.random() < 0.38) dropPickup(e.x + e.w / 2, e.y);
     updateHUD();
@@ -264,14 +382,15 @@ function hurtEnemy(e, dmg) {
 function hurtBoss(dmg) {
   if (!boss || !boss.alive) return;
   boss.hp -= dmg; shake = 5;
-  fx(boss.x + 48, boss.y + 48, '#f80', 6);
+  fx(boss.x + boss.w / 2, boss.y + boss.h / 2, '#f80', 6);
   if (boss.hp <= 0) {
     boss.alive = false;
     score += 6000;
-    explodeAt(boss.x + 48, boss.y + 48, 70);
+    boss.dying = true; boss.dyingTimer = 70;
+    explodeAt(boss.x + boss.w / 2, boss.y + boss.h / 2, 70);
     setTimeout(() => explodeAt(boss.x + 20, boss.y + 20, 50), 250);
-    setTimeout(() => explodeAt(boss.x + 80, boss.y + 60, 60), 500);
-    setTimeout(levelClear, 2400);
+    setTimeout(() => explodeAt(boss.x + boss.w - 20, boss.y + 40, 60), 500);
+    setTimeout(() => explodeAt(boss.x + boss.w / 2, boss.y + 60, 80), 800);
     updateHUD();
   }
 }
@@ -281,19 +400,32 @@ function dropPickup(x, y) {
   pickups.push({ x, y, vy: -4, type: Math.random() < 0.5 ? 'ammo' : 'health', life: 300 });
 }
 
-/* ── Boss factory ────────────────────────────────────────────────────────── */
+/* ── Boss factory — Cyprus-Cocopta (Level 1 boss) ────────────────────────────
+   Native sprite frames are 96x96 (2x the hero's 48x48 frames, which are
+   drawn at 2x scale = 96px on-screen). Drawing the boss at 1x scale makes
+   its on-screen height exactly 96px — IDENTICAL to the player's height, as
+   explicitly requested. Hitbox is sized to match the visible character. ── */
+const BOSS_DRAW_SCALE = 1.0;
+const BOSS_FRAME = 96;
+
 function mkBoss() {
+  const drawH = BOSS_FRAME * BOSS_DRAW_SCALE; // ~115px, vs player's 96px
+  const drawW = BOSS_FRAME * BOSS_DRAW_SCALE;
   return {
-    x: LEVEL_LEN - 300, y: GND - 192, w: 96, h: 192,
+    x: curStageDef.len - 360, y: GND - drawH, w: 48, h: drawH,
+    drawW, drawH,
     vx: 0, vy: 0, face: -1,
-    hp: 260 + level * 60, maxHp: 260 + level * 60,
-    shootCd: 0, dir: -1, spd: 1.0 + level * 0.15,
+    hp: 420 + level * 80, maxHp: 420 + level * 80,
+    shootCd: 0, dir: -1, spd: 1.3 + level * 0.1,
     spr: {
-      idle: spr('cyborg_idle', 48, 48, 4, 5),
-      run:  spr('cyborg_run',  48, 48, 6, 8),
-      atk:  spr('cyborg_attack2', 48, 48, 8, 10),
+      idle:   spr('boss_cc_idle',   96, 96, 10, 7),
+      run:    spr('boss_cc_run',    96, 96, 16, 12),
+      attack: spr('boss_cc_attack', 96, 96, 7,  14, false),
+      hurt:   spr('boss_cc_hurt',   96, 96, 4,  10, false),
     },
     curSpr: null, state: 'idle', alive: true, phase: 0,
+    dying: false, dyingTimer: 0,
+    meleeCd: 0,
   };
 }
 
@@ -309,16 +441,21 @@ function updatePlayer() {
 
   if (p.state === 'death') { p.spr.death.update(); if (p.spr.death.done) playerDie(); return; }
 
+  if (p.fallingToDeath) {
+    p.vy = Math.min(p.vy + GRAV, MAXFALL);
+    p.y += p.vy;
+    if (p.y > PIT_DEATH_Y) { hurtPlayer(p.hp + 999); }
+    return;
+  }
+
   p.crouching = K.down() && p.onGnd;
 
-  // Horizontal movement
   if (!p.attacking) {
     if (K.left())       { p.vx = -p.def.speed; p.face = -1; }
     else if (K.right()) { p.vx =  p.def.speed; p.face =  1; }
     else                { p.vx *= 0.65; }
   } else { p.vx *= 0.5; }
 
-  // Jump / double-jump
   const wantsJump = K.up();
   if (wantsJump && !p.jumped) {
     if (p.onGnd) {
@@ -331,7 +468,6 @@ function updatePlayer() {
   }
   if (!wantsJump) p.jumped = false;
 
-  // Attack
   if (K.attack() && p.atkCd <= 0) {
     p.atkCd = 16; p.attacking = true; p.atkTimer = 16; p.atkDmgDone = false;
     if (p.ammo > 0) {
@@ -353,16 +489,14 @@ function updatePlayer() {
         if (!e.alive || e.dying) continue;
         if (rr(hbx, hby, 60, 48, e.x, e.y, e.w, e.h)) hurtEnemy(e, p.def.atk * 0.7);
       }
-      if (boss && rr(hbx, hby, 60, 48, boss.x, boss.y, boss.w, boss.h)) hurtBoss(p.def.atk * 0.5);
+      if (boss && !boss.dying && rr(hbx, hby, 60, 48, boss.x, boss.y, boss.w, boss.h)) hurtBoss(p.def.atk * 0.5);
     }
     if (p.atkTimer <= 0) p.attacking = false;
   }
 
-  // Physics
   p.vy = Math.min(p.vy + GRAV, MAXFALL);
   p.x += p.vx; p.y += p.vy;
 
-  // Platform collision
   p.onGnd = false;
   for (const pl of platforms) {
     if (p.vy >= 0 && p.y + p.h > pl.y && p.y + p.h - p.vy <= pl.y + 10
@@ -370,21 +504,32 @@ function updatePlayer() {
       p.y = pl.y - p.h; p.vy = 0; p.onGnd = true; p.djumped = false;
     }
   }
-  if (p.y + p.h >= GND) { p.y = GND - p.h; p.vy = 0; p.onGnd = true; p.djumped = false; }
-  p.x = Math.max(camX + 4, Math.min(p.x, LEVEL_LEN - p.w - 4));
 
-  // State machine
+  const overPit = isOverPit(p.x + p.w / 2, 2);
+  if (!overPit && p.y + p.h >= GND) {
+    p.y = GND - p.h; p.vy = 0; p.onGnd = true; p.djumped = false;
+  } else if (overPit && p.y + p.h >= GND && p.vy >= 0) {
+    p.fallingToDeath = true;
+    setState(p, 'jump');
+  }
+
+  p.x = Math.max(camX + 4, Math.min(p.x, curStageDef.len - p.w - 4));
+
   if (p.state !== 'death' && p.state !== 'hurt') {
     if (!p.onGnd && p.state !== 'jump' && p.state !== 'djump') setState(p, 'jump');
     else if (p.onGnd && !p.attacking) setState(p, Math.abs(p.vx) > 0.4 ? 'run' : 'idle');
   }
 
-  // Camera
   targetCamX = p.x - W * 0.32;
   camX += (targetCamX - camX) * 0.1;
-  camX = Math.max(0, Math.min(camX, LEVEL_LEN - W));
+  camX = Math.max(0, Math.min(camX, Math.max(0, curStageDef.len - W)));
 
   (p.spr[p.state] || p.spr.idle).update();
+
+  if (curStageDef.type === 'gate' && !stageClearedPending && p.x >= curStageDef.gateX) {
+    stageClearedPending = true;
+    setTimeout(stageClear, 400);
+  }
 }
 
 function updateEnemies() {
@@ -404,44 +549,46 @@ function updateEnemies() {
     if (!e.alert) continue;
     e.face = dx > 0 ? 1 : -1;
 
-    // ── Archetype-specific movement AI ─────────────────────────────────────
     if (e.archetype === 'rusher') {
-      // Charges straight at the player almost constantly, barely pauses.
       e.aiT--;
       if (e.aiT <= 0) { e.aiT = 8 + Math.random() * 10; e.moveDir = dist > 36 ? e.face : 0; }
       e.vx = e.moveDir * e.speed;
     } else if (e.archetype === 'sniper') {
-      // Keeps a comfortable shooting range: backs off if too close, idles if far.
       e.aiT--;
       if (e.aiT <= 0) {
         e.aiT = 30 + Math.random() * 25;
-        if (dist < 160) e.moveDir = -e.face;       // retreat
-        else if (dist > 320) e.moveDir = e.face;    // close the gap a little
-        else e.moveDir = 0;                          // hold position, shoot
+        if (dist < 160) e.moveDir = -e.face;
+        else if (dist > 320) e.moveDir = e.face;
+        else e.moveDir = 0;
       }
       e.vx = e.moveDir * e.speed;
     } else {
-      // brawler: standard chase-and-pause
       e.aiT--;
       if (e.aiT <= 0) { e.aiT = 25 + Math.random() * 30; e.moveDir = dist > 90 ? e.face : 0; }
       e.vx = e.moveDir * e.speed;
     }
 
+    const nextX = e.x + e.vx;
+    if (isOverPit(nextX + e.w / 2, 2) && e.onGnd) {
+      e.vx = 0; e.moveDir = 0;
+    }
+
     e.vy = Math.min(e.vy + GRAV, MAXFALL);
     e.x += e.vx; e.y += e.vy;
 
+    e.onGnd = false;
     for (const pl of platforms) {
       if (e.vy >= 0 && e.y + e.h > pl.y && e.y + e.h - e.vy <= pl.y + 10
           && e.x + e.w - 8 > pl.x && e.x + 8 < pl.x + pl.w) {
-        e.y = pl.y - e.h; e.vy = 0;
+        e.y = pl.y - e.h; e.vy = 0; e.onGnd = true;
       }
     }
-    if (e.y + e.h >= GND) { e.y = GND - e.h; e.vy = 0; }
+    if (!isOverPit(e.x + e.w / 2, 2) && e.y + e.h >= GND) {
+      e.y = GND - e.h; e.vy = 0; e.onGnd = true;
+    }
 
-    // ── Archetype-specific attacks ──────────────────────────────────────────
     e.atkCd--;
     if (e.archetype === 'sniper') {
-      // Ranged only, fires whenever in line of sight range, doesn't melee.
       if (e.atkCd <= 0 && dist < 380 && e.shootAmmo > 0) {
         e.atkCd = 48;
         e.atkTimer = 14; e.atkDone = false;
@@ -452,13 +599,11 @@ function updateEnemies() {
           isEnemy: true, life: 60, dmg: 16 });
       }
     } else if (e.archetype === 'rusher') {
-      // Melee only, fast cooldown, no ranged ammo.
       if (e.atkCd <= 0 && dist < 110) {
         e.atkCd = 32;
         e.atkTimer = 16; e.atkDone = false;
       }
     } else {
-      // brawler: melee, occasional ranged if cyborg-sprite with ammo
       if (e.atkCd <= 0 && dist < 120) {
         e.atkCd = e.type === 'cyborg' ? 65 : 50;
         e.atkTimer = 20; e.atkDone = false;
@@ -481,7 +626,7 @@ function updateEnemies() {
           hurtPlayer(dmg);
       }
     } else if (e.atkTimer > 0) {
-      e.atkTimer--; // sniper still counts down for its attack-pose anim
+      e.atkTimer--;
     }
 
     const nst = e.atkTimer > 0 ? 'attack' : Math.abs(e.vx) > 0.2 ? 'run' : 'idle';
@@ -496,40 +641,62 @@ function updateEnemies() {
 }
 
 function updateBoss() {
-  if (!boss || !boss.alive) return;
+  if (!boss) return;
   const p = player; if (!p) return;
+
+  if (boss.dying) {
+    boss.dyingTimer--;
+    boss.y -= 0.4;
+    if (boss.dyingTimer <= 0) { boss.alive = false; boss = null; stageClear(); }
+    return;
+  }
+  if (!boss.alive) return;
+
   const phase = boss.hp < boss.maxHp * 0.3 ? 2 : boss.hp < boss.maxHp * 0.6 ? 1 : 0;
   boss.phase = phase;
   const spd = boss.spd * (1 + phase * 0.5);
+
+  const dx = p.x - boss.x, dist = Math.abs(dx);
+  boss.face = dx < 0 ? -1 : 1;
+  boss.dir = dist > 70 ? (dx > 0 ? 1 : -1) : 0;
   boss.x += boss.dir * spd;
-  if (boss.x < LEVEL_LEN - 640 || boss.x + boss.w > LEVEL_LEN - 20) boss.dir *= -1;
+  boss.x = Math.max(curStageDef.len - 900, Math.min(boss.x, curStageDef.len - boss.w - 20));
+
   boss.vy = Math.min(boss.vy + GRAV, MAXFALL);
   boss.y += boss.vy;
   if (boss.y + boss.h >= GND) { boss.y = GND - boss.h; boss.vy = 0; }
-  boss.face = p.x < boss.x ? -1 : 1;
 
   boss.shootCd--;
   if (boss.shootCd <= 0) {
-    boss.shootCd = phase === 2 ? 18 : phase === 1 ? 28 : 44;
-    const cx = boss.x + 48, cy = boss.y + 64;
+    boss.shootCd = phase === 2 ? 22 : phase === 1 ? 32 : 48;
+    const cx = boss.x + boss.w / 2, cy = boss.y + boss.h * 0.4;
     const ang = Math.atan2(p.y + 40 - cy, p.x + 24 - cx);
-    const s   = 9 + phase * 2;
+    const s   = 8 + phase * 2;
     const spread = phase === 2 ? 5 : phase === 1 ? 3 : 1;
     for (let i = 0; i < spread; i++) {
       const a = ang + (i - (spread - 1) / 2) * 0.22;
-      bullets.push({ x: cx, y: cy, vx: Math.cos(a) * s, vy: Math.sin(a) * 0.5, isEnemy: true, life: 65, dmg: 22 });
+      bullets.push({ x: cx, y: cy, vx: Math.cos(a) * s, vy: Math.sin(a) * 0.5, isEnemy: true, life: 65, dmg: 18 });
     }
-    if (phase >= 1) bullets.push({ x: cx, y: cy, vx: (Math.random() - 0.5) * 3, vy: -8, isEnemy: true, life: 80, dmg: 18, gravity: 0.5 });
-    boss.spr.atk.reset(); boss.state = 'atk';
+    setState(boss, 'attack');
   }
 
-  const nst = Math.abs(boss.dir) > 0 ? 'run' : 'idle';
-  if (boss.state !== 'atk') boss.state = nst;
-  boss.spr[boss.state] && boss.spr[boss.state].update();
+  boss.meleeCd--;
+  if (boss.meleeCd <= 0 && dist < 90) {
+    boss.meleeCd = 50;
+    if (p.inv <= 0) hurtPlayer(phase === 2 ? 26 : 18);
+    shake = 5;
+  }
+
+  const nst = boss.state === 'attack' && boss.spr.attack && !boss.spr.attack.done
+    ? 'attack'
+    : (Math.abs(boss.dir) > 0 ? 'run' : 'idle');
+  if (nst !== boss.state) { boss.state = nst; boss.spr[nst] && boss.spr[nst].reset(); }
+  boss.state = nst;
   boss.curSpr = boss.spr[boss.state] || boss.spr.idle;
+  boss.curSpr.update();
 
   if (p && p.inv <= 0 && rr(boss.x + 8, boss.y + 8, boss.w - 16, boss.h - 16, p.x + 8, p.y + 8, p.w - 16, p.h - 16))
-    hurtPlayer(20);
+    hurtPlayer(10);
 }
 
 function updateBullets() {
@@ -540,13 +707,9 @@ function updateBullets() {
     if (b.gravity) b.vy = Math.min(b.vy + b.gravity, 8);
     b.life--;
     if (b.life <= 0 || b.y > H + 20) { bullets.splice(i, 1); continue; }
-    if (b.y >= GND && b.gravity) {
-      explodeAt(b.x, b.y, 30); bullets.splice(i, 1);
-      if (p && p.inv <= 0 && Math.abs(p.x - b.x) < 50 && Math.abs(p.y + p.h - b.y) < 50) hurtPlayer(12);
-      continue;
-    }
+
     if (!b.isEnemy) {
-      if (boss && boss.alive && rr(b.x - 4, b.y - 4, 8, 8, boss.x, boss.y, boss.w, boss.h)) {
+      if (boss && boss.alive && !boss.dying && rr(b.x - 4, b.y - 4, 8, 8, boss.x, boss.y, boss.w, boss.h)) {
         hurtBoss(b.dmg); fx(b.x, b.y, '#f80', 5); bullets.splice(i, 1); continue;
       }
       let hit = false;
@@ -558,7 +721,7 @@ function updateBullets() {
       }
       if (hit) bullets.splice(i, 1);
     } else {
-      if (p && p.inv <= 0 && rr(b.x - 4, b.y - 4, 8, 8, p.x + 6, p.y + 6, p.w - 12, p.h - 12)) {
+      if (p && p.inv <= 0 && !p.fallingToDeath && rr(b.x - 4, b.y - 4, 8, 8, p.x + 6, p.y + 6, p.w - 12, p.h - 12)) {
         hurtPlayer(b.dmg); fx(b.x, b.y, '#f44', 4); bullets.splice(i, 1);
       }
     }
@@ -590,10 +753,8 @@ function updatePickups() {
 }
 
 function checkBoss() {
-  if (bossSpawned) return;
-  if (enemies.filter(e => e.alive).length === 0 && player && player.x > LEVEL_LEN - 1000) {
-    bossSpawned = true; boss = mkBoss();
-  }
+  if (curStageDef.type !== 'boss' || bossSpawned) return;
+  bossSpawned = true; boss = mkBoss();
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -637,13 +798,29 @@ function drawGround() {
   ctx.fillStyle = '#0c0c1a';
   ctx.fillRect(0, GND, W, H - GND);
 
-  if (ts && ts.complete && ts.naturalWidth) {
-    const s = Math.floor(camX / TILE), e = Math.ceil((camX + W) / TILE) + 1;
-    for (let t = s; t < e; t++) {
-      const sx = t * TILE - camX, col = t % 13;
-      ctx.drawImage(ts, col * TILE,      0,    TILE, TILE, Math.round(sx), GND,          TILE, TILE);
-      ctx.drawImage(ts, (col % 6) * TILE, TILE, TILE, TILE, Math.round(sx), GND + TILE,   TILE, TILE);
-      ctx.drawImage(ts, (col % 6) * TILE, TILE*2, TILE, TILE, Math.round(sx), GND + TILE*2, TILE, TILE);
+  const s = Math.floor(camX / TILE), e = Math.ceil((camX + W) / TILE) + 1;
+  for (let t = s; t < e; t++) {
+    const worldX = t * TILE;
+    if (isOverPit(worldX + TILE / 2, 0)) continue;
+    const sx = worldX - camX, col = t % 13;
+    if (ts && ts.complete && ts.naturalWidth) {
+      ctx.drawImage(ts, col * TILE,        0,      TILE, TILE, Math.round(sx), GND,          TILE, TILE);
+      ctx.drawImage(ts, (col % 6) * TILE,  TILE,   TILE, TILE, Math.round(sx), GND + TILE,   TILE, TILE);
+      ctx.drawImage(ts, (col % 6) * TILE,  TILE*2, TILE, TILE, Math.round(sx), GND + TILE*2, TILE, TILE);
+    } else {
+      ctx.fillStyle = '#2a2a4e'; ctx.fillRect(Math.round(sx), GND, TILE, H - GND);
+    }
+  }
+
+  for (const pit of pits) {
+    const sx = pit.x - camX;
+    if (sx > W || sx + pit.w < 0) continue;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(Math.round(sx), GND, pit.w, H - GND);
+    ctx.fillStyle = '#ffcc00';
+    for (let yy = 0; yy < 3; yy++) {
+      ctx.fillRect(Math.round(sx), GND + yy * 8, 6, 4);
+      ctx.fillRect(Math.round(sx + pit.w - 6), GND + yy * 8, 6, 4);
     }
   }
 
@@ -658,6 +835,18 @@ function drawGround() {
       ctx.fillStyle = '#4a6aba'; ctx.fillRect(Math.round(sx), pl.y, pl.w, 4);
     }
   }
+
+  if (curStageDef && curStageDef.type === 'gate') {
+    const gx = curStageDef.gateX - camX;
+    if (gx > -60 && gx < W + 60) {
+      ctx.fillStyle = stageClearedPending ? '#0f0a' : '#f5c518aa';
+      ctx.fillRect(Math.round(gx), GND - 90, 6, 90);
+      ctx.fillRect(Math.round(gx) + 40, GND - 90, 6, 90);
+      ctx.fillStyle = stageClearedPending ? '#0f0' : '#f5c518';
+      ctx.font = '7px "Press Start 2P",monospace'; ctx.textAlign = 'center';
+      ctx.fillText('EXIT', Math.round(gx) + 23, GND - 96); ctx.textAlign = 'left';
+    }
+  }
 }
 
 function shadow(x, y, rx = 26, ry = 5) {
@@ -669,10 +858,10 @@ function drawPlayer() {
   const p = player; if (!p) return;
   const sx = p.x - camX;
   if (p.inv > 0 && Math.floor(p.inv / 5) % 2 === 1) ctx.globalAlpha = 0.35;
-  shadow(sx + 48, GND + 2, 30);
+  if (!p.fallingToDeath) shadow(sx + 48, GND + 2, 30);
   (p.spr[p.state] || p.spr.idle).draw(ctx, sx, p.y, p.face === -1, 2);
   ctx.globalAlpha = 1;
-  if (p.hp < p.maxHp) {
+  if (p.hp < p.maxHp && !p.fallingToDeath) {
     const bw = 80, bx = sx + 48 - bw / 2, by = p.y - 14;
     ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(bx - 1, by - 1, bw + 2, 8);
     const pct = Math.max(0, p.hp / p.maxHp);
@@ -696,7 +885,6 @@ function drawEnemies() {
       ctx.fillStyle = hp > 0.5 ? '#0c0' : hp > 0.25 ? '#fa0' : '#f00';
       ctx.fillRect(bx, by, Math.round(bw * hp), 5);
 
-      // Archetype tag so the player can read enemy intent at a glance
       if (e.archetype === 'rusher') {
         ctx.fillStyle = '#ff5050';
         ctx.font = '6px "Press Start 2P",monospace'; ctx.textAlign = 'center';
@@ -711,32 +899,38 @@ function drawEnemies() {
 }
 
 function drawBossSprite() {
-  if (!boss || !boss.alive) return;
+  if (!boss) return;
   const sx = boss.x - camX;
   if (sx < -300 || sx > W + 300) return;
-  shadow(sx + 48, GND + 4, 56, 10);
-  if (boss.curSpr) boss.curSpr.draw(ctx, sx, boss.y, boss.face === -1, 4);
 
-  const bw = W - 100, bx = 50, by = H - 22;
-  ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(bx - 2, by - 2, bw + 4, 14);
-  ctx.fillStyle = '#300'; ctx.fillRect(bx, by, bw, 10);
-  const pct = Math.max(0, boss.hp / boss.maxHp);
-  ctx.fillStyle = boss.phase === 2 ? '#f00' : boss.phase === 1 ? '#fa0' : '#0c0';
-  ctx.fillRect(bx, by, Math.round(bw * pct), 10);
-  ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fillRect(bx, by, bw, 4);
-  ctx.font = '7px "Press Start 2P",monospace';
-  ctx.fillStyle = '#f5c518'; ctx.textAlign = 'center';
-  ctx.fillText('★  BOSS CYBORG  ★', W / 2, by - 5);
-  ctx.textAlign = 'left';
+  if (boss.dying) ctx.globalAlpha = Math.max(0, boss.dyingTimer / 70);
+
+  shadow(sx + boss.w / 2, GND + 4, 50, 9);
+  if (boss.curSpr) {
+    const drawX = sx - (boss.drawW - boss.w) / 2;
+    boss.curSpr.draw(ctx, drawX, boss.y, boss.face === -1, BOSS_DRAW_SCALE * 2);
+  }
+  ctx.globalAlpha = 1;
+
+  if (!boss.dying) {
+    const bw = W - 100, bx = 50, by = H - 22;
+    ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(bx - 2, by - 2, bw + 4, 14);
+    ctx.fillStyle = '#300'; ctx.fillRect(bx, by, bw, 10);
+    const pct = Math.max(0, boss.hp / boss.maxHp);
+    ctx.fillStyle = boss.phase === 2 ? '#f00' : boss.phase === 1 ? '#fa0' : '#0c0';
+    ctx.fillRect(bx, by, Math.round(bw * pct), 10);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fillRect(bx, by, bw, 4);
+    ctx.font = '7px "Press Start 2P",monospace';
+    ctx.fillStyle = '#f5c518'; ctx.textAlign = 'center';
+    ctx.fillText('★  CYPRUS-COCOPTA  ★', W / 2, by - 5);
+    ctx.textAlign = 'left';
+  }
 }
 
 function drawBullets() {
   for (const b of bullets) {
     const sx = Math.round(b.x - camX), sy = Math.round(b.y);
-    if (b.gravity) {
-      ctx.fillStyle = '#5a8a2a'; ctx.fillRect(sx - 5, sy - 5, 10, 10);
-      ctx.fillStyle = '#8aca4a'; ctx.fillRect(sx - 3, sy - 3, 6, 6);
-    } else if (b.isEnemy) {
+    if (b.isEnemy) {
       ctx.fillStyle = '#f44'; ctx.fillRect(sx - 5, sy - 3, 11, 5);
       ctx.fillStyle = '#ff0'; ctx.fillRect(sx - 3, sy - 1, 7, 3);
     } else {
@@ -843,9 +1037,34 @@ function playerDie() {
   }
 }
 
-function levelClear() {
-  level++; stage = 1; running = false;
-  window.showOverlay('STAGE CLEAR!', `SCORE: ${score}`, '► NEXT STAGE', '#0f0');
+function stageClear() {
+  running = false;
+  const key = `${level}-${stage}`;
+  const isLevelFinal = stage >= 3;
+
+  if (isLevelFinal) {
+    window.showOverlay(
+      'LEVEL CLEAR!',
+      `LEVEL ${level} COMPLETE — SCORE: ${score}`,
+      '► CONTINUE',
+      '#0f0'
+    );
+  } else {
+    window.showOverlay(
+      'STAGE CLEAR!',
+      `STAGE ${key} COMPLETE — SCORE: ${score}`,
+      '► NEXT STAGE',
+      '#0f0'
+    );
+  }
+}
+
+function advanceStage() {
+  if (stage >= 3) {
+    level++; stage = 1;
+  } else {
+    stage++;
+  }
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -859,14 +1078,13 @@ function loop(ts) {
 
   if (running) {
     updatePlayer(); updateEnemies();
-    if (bossSpawned && boss) updateBoss();
-    updateBullets(); updateParticles(); updatePickups();
     checkBoss();
+    if (boss) updateBoss();
+    updateBullets(); updateParticles(); updatePickups();
     if (comboT > 0) comboT--; else combo = 0;
     if (frameN % 3 === 0) updateHUD();
   }
 
-  /* Draw */
   ctx.save();
   if (shake > 0) {
     ctx.translate(Math.round((Math.random() - 0.5) * shake), Math.round((Math.random() - 0.5) * shake));
@@ -875,10 +1093,18 @@ function loop(ts) {
   drawBG(); drawGround();
   drawPickups(); drawParticles();
   drawEnemies();
-  if (bossSpawned && boss) drawBossSprite();
+  if (boss) drawBossSprite();
   drawPlayer(); drawBullets();
 
-  // Combo
+  if (curStageDef && frameN < 200) {
+    const a = frameN < 150 ? 1 : Math.max(0, (200 - frameN) / 50);
+    ctx.globalAlpha = a;
+    ctx.font = '8px "Press Start 2P",monospace';
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
+    ctx.fillText(curStageDef.label, 14, 28);
+    ctx.globalAlpha = 1;
+  }
+
   if (comboT > 0 && combo >= 2) {
     const a = Math.min(1, comboT / 20);
     ctx.globalAlpha = a;
@@ -887,23 +1113,25 @@ function loop(ts) {
     ctx.fillText(combo + 'x COMBO!', W / 2, 70);
     ctx.globalAlpha = 1; ctx.textAlign = 'left';
   }
-  // Hints
-  if (!bossSpawned && player && enemies.filter(e => e.alive).length === 0) {
-    if (Math.floor(frameN / 20) % 2 === 0) {
-      ctx.font = '9px "Press Start 2P",monospace'; ctx.fillStyle = '#fa0'; ctx.textAlign = 'center';
-      ctx.fillText('→ ADVANCE TO BOSS ARENA', W / 2, 38); ctx.textAlign = 'left';
-    }
-  }
-  if (bossSpawned && boss && boss.alive && boss.x - camX > W + 50) {
+
+  if (curStageDef && curStageDef.type === 'boss' && boss && boss.alive && !boss.dying && boss.x - camX > W + 50) {
     if (Math.floor(frameN / 15) % 2 === 0) {
       ctx.font = '9px "Press Start 2P",monospace'; ctx.fillStyle = '#f44'; ctx.textAlign = 'center';
-      ctx.fillText('⚠  BOSS INCOMING!  ⚠', W / 2, 38); ctx.textAlign = 'left';
+      ctx.fillText('⚠  CYPRUS-COCOPTA INCOMING!  ⚠', W / 2, 38); ctx.textAlign = 'left';
+    }
+  }
+  if (curStageDef && curStageDef.type === 'gate' && !stageClearedPending && player) {
+    const distToGate = curStageDef.gateX - player.x;
+    if (distToGate > 0 && distToGate < 500 && enemies.some(e => e.alive)) {
+      if (Math.floor(frameN / 20) % 2 === 0) {
+        ctx.font = '8px "Press Start 2P",monospace'; ctx.fillStyle = '#fa0'; ctx.textAlign = 'center';
+        ctx.fillText('→ REACH THE EXIT GATE', W / 2, 38); ctx.textAlign = 'left';
+      }
     }
   }
 
   ctx.restore();
 
-  // Touch HUD (on top, no shake)
   if (window.drawTouchHUD) window.drawTouchHUD(ctx, W, H);
 
   rafId = requestAnimationFrame(loop);
@@ -915,10 +1143,23 @@ function loop(ts) {
 window.startGame = function (charId) {
   selectedChar = charId || selectedChar;
   if (gameOver) { score = 0; lives = 3; level = 1; stage = 1; gameOver = false; }
-  setupLevel();
+  setupStage();
   player = mkPlayer(selectedChar);
   updateHUD();
   running = true;
+  frameN = 0;
+  if (rafId) cancelAnimationFrame(rafId);
+  lastTs = performance.now();
+  rafId = requestAnimationFrame(loop);
+};
+
+window.continueToNextStage = function () {
+  advanceStage();
+  setupStage();
+  player = mkPlayer(selectedChar);
+  updateHUD();
+  running = true;
+  frameN = 0;
   if (rafId) cancelAnimationFrame(rafId);
   lastTs = performance.now();
   rafId = requestAnimationFrame(loop);
@@ -927,6 +1168,7 @@ window.startGame = function (charId) {
 window.showOverlay = function (title, sub, btn, col = '#f5c518') {
   const ov = document.getElementById('ov');
   if (!ov) return;
+  const isStageClear = title === 'STAGE CLEAR!' || title === 'LEVEL CLEAR!';
   ov.innerHTML = `
     <div class="ov-title" style="color:${col};text-shadow:3px 3px 0 #000,0 0 22px ${col}88">${title}</div>
     <div class="ov-sub">${sub}</div>
@@ -934,6 +1176,10 @@ window.showOverlay = function (title, sub, btn, col = '#f5c518') {
   ov.style.display = 'flex';
   document.getElementById('dyn-btn').addEventListener('click', () => {
     ov.style.display = 'none';
-    window.startGame(selectedChar);
+    if (isStageClear) {
+      window.continueToNextStage();
+    } else {
+      window.startGame(selectedChar);
+    }
   });
 };

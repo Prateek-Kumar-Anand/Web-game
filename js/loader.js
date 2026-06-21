@@ -61,6 +61,12 @@ const ASSET_MANIFEST = {
   cyborg_punch:      'assets/sprites/cyborg/punch.png',
   cyborg_run_attack: 'assets/sprites/cyborg/run_attack.png',
   cyborg_doublejump: 'assets/sprites/cyborg/doublejump.png',
+
+  // ── Boss: Cyprus-Cocopta (Level 1 boss) ─────────────────────────────────────
+  boss_cc_idle:   'assets/bosses/cyprus_cocopta/idle.png',
+  boss_cc_run:    'assets/bosses/cyprus_cocopta/run.png',
+  boss_cc_attack: 'assets/bosses/cyprus_cocopta/attack.png',
+  boss_cc_hurt:   'assets/bosses/cyprus_cocopta/hurt.png',
 };
 
 // Gun icons 01–40

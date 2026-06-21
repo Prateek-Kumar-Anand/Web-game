@@ -50,6 +50,41 @@ stage eases you in with brawlers and rushers only.
 
 ---
 
+## 🗺️ Level 1 — Rooftop (complete)
+
+Per the game design doc, every level is split into 3 sub-stages:
+
+| Stage | Name | Mechanic |
+|-------|------|----------|
+| **1-1** | Rooftop Entry | Basic enemy encounters across 7 platforms. Walk to the glowing **EXIT** gate to clear. |
+| **1-2** | Rooftop Crossing | Heavier enemy swarm (rusher/sniper/brawler mix) **plus environmental fall-hazard pits** — 4 gaps in the rooftop, each crossable via a short jump or a helper platform. Falling in costs a life. |
+| **1-3** | Boss — Cyprus-Cocopta | Full boss fight. 3 aggression phases based on remaining HP (ranged spread-shot gets wider and faster, melee swipe hits harder). Defeating it clears Level 1 and advances to Level 2. |
+
+Story label cards (e.g. "STAGE 1-2 · ROOFTOP CROSSING") fade in at the start of each stage.
+
+### Boss sizing
+Cyprus-Cocopta's sprite sheets are native **96×96px per frame** (2× the hero
+pack's 48×48). Since the hero is drawn at 2× scale (→96px on-screen), the
+boss is drawn at **1× scale**, landing at exactly **96px tall — identical
+height to the player**. Its hitbox (`48w × 96h`) matches the hero's footprint
+exactly. See `BOSS_DRAW_SCALE` / `BOSS_FRAME` constants near the top of
+`js/game.js` if you want to adjust this later.
+
+Cyprus-Cocopta's asset pack has no death animation, so its defeat uses a
+particle-driven sequence instead (multi-stage explosions + fade-out) rather
+than a sprite-based death.
+
+### Adding Level 2 / Level 3
+Each stage is defined by a small builder function in `js/game.js`
+(`buildStage_1_1`, `buildStage_1_2`, `buildStage_1_3`), registered in the
+`STAGE_BUILDERS` map by `"level-stage"` key (e.g. `'2-1'`). To add Level 2
+(Desert) or Level 3 (Hell), write `buildStage_2_1`, `buildStage_2_2`,
+`buildStage_2_3`, etc. following the same pattern, then register them in
+`STAGE_BUILDERS`. Until a stage is registered, the game falls back to a
+short placeholder corridor labeled "COMING SOON" so nothing crashes.
+
+---
+
 ## 📡 Offline play (service worker)
 
 `sw.js` pre-caches the entire app shell and all 87 game assets on
