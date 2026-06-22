@@ -135,6 +135,7 @@ function mkPlayer(cid) {
     shootCd: 0,
     gunIdx: 1,
     fallingToDeath: false,
+    petrified: 0, // frames remaining; while >0, player cannot move/jump/shoot
   };
 }
 
@@ -186,8 +187,74 @@ function mkEnemy(x, type, archetype) {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   STAGE DEFINITIONS — Level 1 (Rooftop)
-   ────────────────────────────────────────────────────────────────────────── */
+   DESERT CREATURES — Level 2 enemies
+   ────────────────────────────────────────────────────────────────────────── 
+   Unlike the human enemy packs (uniform 48x48 frames), each creature's art
+   has a different native canvas size and the character only fills part of
+   that canvas. CREATURE_CFG below was derived by measuring each creature's
+   actual non-transparent content against its canvas, then computing a draw
+   scale so creatures read at sensible *relative* sizes next to the 96px-tall
+   hero (small_dragon/lizard = small grunts, demon = human-sized threat,
+   jinn = floating medium humanoid, medusa = medium serpent-bodied). The
+   hitbox is sized to the visible character, not the padded canvas, so combat
+   feels fair. */
+const CREATURE_CFG = {
+  lizard:       { canvas: 256, scale: 1.111, hbW: 70, hbH: 60, archetype: 'rusher',  hasRanged: false },
+  small_dragon: { canvas: 128, scale: 1.486, hbW: 80, hbH: 55, archetype: 'rusher',  hasRanged: 'fire_attack' },
+  demon:        { canvas: 256, scale: 0.978, hbW: 56, hbH: 90, archetype: 'brawler', hasRanged: false },
+  jinn:         { canvas: 128, scale: 1.039, hbW: 40, hbH: 80, archetype: 'sniper',  hasRanged: 'magic_attack' },
+  medusa:       { canvas: 128, scale: 1.190, hbW: 50, hbH: 75, archetype: 'medusa',  hasRanged: false },
+};
+
+/** Creature animation sets — keys map to loader.js asset names via
+ *  `${creature}_${anim}`. Frame counts/sizes come from creature_manifest. */
+const CREATURE_ANIMS = {
+  lizard:       { idle: [3,256], walk: [6,256], attack: [5,256], hurt: [2,256], death: [6,256] },
+  small_dragon: { idle: [3,128], walk: [4,128], attack: [3,128], fire_attack: [9,64], hurt: [2,128], death: [4,128] },
+  demon:        { idle: [3,256], walk: [6,256], attack: [4,256], hurt: [2,256], death: [6,256] },
+  jinn:         { idle: [3,128], flight: [4,128], attack: [4,128], magic_attack: [13,256], hurt: [2,128], death: [6,128] },
+  medusa:       { idle: [3,128], walk: [4,128], attack: [6,128], stone: [8,128], hurt: [2,128], death: [6,128] },
+};
+
+function mkCreature(x, kind) {
+  const cfg = CREATURE_CFG[kind];
+  const animsDef = CREATURE_ANIMS[kind];
+  const sp = {};
+  for (const [animName, [fc, fw]] of Object.entries(animsDef)) {
+    const fps = animName === 'idle' ? 6 : animName.includes('attack') || animName === 'stone' ? 12 : 10;
+    const loop = !(animName.includes('attack') || animName === 'hurt' || animName === 'death' || animName === 'stone');
+    sp[animName] = spr(`${kind}_${animName}`, fw, fw, fc, fps, loop);
+  }
+  // Normalize movement anim key: some creatures use 'walk', jinn uses 'flight'
+  const moveKey = sp.walk ? 'walk' : (sp.flight ? 'flight' : 'idle');
+
+  let hp, alertR, speed;
+  if (cfg.archetype === 'rusher') { hp = 30 + level * 10; alertR = 260; speed = 2.0; }
+  else if (cfg.archetype === 'sniper') { hp = 50 + level * 12; alertR = 340; speed = 0.8; }
+  else if (cfg.archetype === 'medusa') { hp = 70 + level * 16; alertR = 280; speed = 1.0; }
+  else { hp = 70 + level * 16; alertR = 240; speed = 1.2; } // brawler
+
+  return {
+    isCreature: true, kind, cfg, moveKey,
+    x, y: GND - cfg.hbH, w: cfg.hbW, h: cfg.hbH,
+    canvasSize: cfg.canvas, scale: cfg.scale,
+    vx: 0, vy: 0,
+    face: -1, archetype: cfg.archetype, spr: sp,
+    state: 'idle', curSpr: sp.idle,
+    hp, maxHp: hp,
+    alert: false, alertR,
+    alive: true, dying: false,
+    hitF: 0,
+    atkCd: 40 + Math.random() * 30,
+    atkTimer: 0, atkDone: false,
+    aiT: 0, moveDir: 0,
+    rangedCd: 0,
+    speed,
+    onGnd: false,
+    // Medusa petrify mechanic
+    stoneCharging: false, stoneTimer: 0,
+  };
+}
 
 /** 1-1: Basic enemies, ends at a stop-point (a clear "gate" the player walks
  *       into, triggers the next-stage loading transition). */
@@ -274,10 +341,142 @@ function buildStage_1_3() {
   };
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+   STAGE DEFINITIONS — Level 2 (Desert)
+   ──────────────────────────────────────────────────────────────────────────
+   2-1  Desert Entry  : bg2, lizard + small_dragon intro
+   2-2  Desert Swarm  : bg3, KILL 20 to unlock exit gate (full creature roster)
+   2-3  Boss Arena    : bg1, Mini-Mausi-Chreno'bellow fight
+   ────────────────────────────────────────────────────────────────────────── */
+
+function buildStage_2_1() {
+  const LEN = 2800;
+  // Sand dune platforms — wide & stable, gentle intro
+  const platData = [
+    [260,  GND - 68, 140], [600,  GND - 56, 120], [960,  GND - 72, 140],
+    [1320, GND - 60, 120], [1700, GND - 76, 140], [2100, GND - 64, 120],
+    [2420, GND - 70, 120],
+  ];
+  for (const [x, y, w] of platData) platforms.push({ x, y, w, h: 22 });
+
+  // Gentle intro: lizards in the front half, small_dragons in the back
+  const lizardPts = [380, 640, 900, 1180, 1460];
+  const dragonPts = [1720, 2000, 2280, 2540];
+  for (const x of lizardPts)    enemies.push(mkCreature(x, 'lizard'));
+  for (const x of dragonPts)    enemies.push(mkCreature(x, 'small_dragon'));
+
+  return {
+    len: LEN, type: 'gate', gateX: LEN - 140,
+    bgKey: 'bg2',
+    label: 'STAGE 2-1 · DESERT ENTRY',
+  };
+}
+
+function buildStage_2_2() {
+  const LEN = 3400;
+  // Flat open desert with occasional raised rocky platforms
+  const platData = [
+    [300,  GND - 80, 110], [700,  GND - 64, 110], [1100, GND - 80, 110],
+    [1500, GND - 72, 110], [1900, GND - 80, 110], [2300, GND - 64, 110],
+    [2700, GND - 80, 110], [3100, GND - 72, 110],
+  ];
+  for (const [x, y, w] of platData) platforms.push({ x, y, w, h: 22 });
+
+  // Full creature roster — all 5 types, 22 enemies (more than the 20-kill
+  // goal so players have a small buffer and can't be softlocked by any
+  // spawning edge cases).
+  const spawnPts = [
+    320, 520, 720, 940, 1160, 1380, 1600, 1820,
+    2040, 2260, 2480, 2700, 2920, 3140,
+    440, 840, 1280, 1720, 2160, 2600, 3040, 3300,
+  ];
+  const kinds = ['lizard', 'small_dragon', 'demon', 'jinn', 'medusa',
+                 'demon', 'jinn', 'lizard', 'medusa', 'small_dragon',
+                 'demon', 'lizard', 'jinn', 'medusa',
+                 'small_dragon', 'demon', 'lizard', 'jinn',
+                 'medusa', 'demon', 'lizard', 'small_dragon'];
+  for (let i = 0; i < spawnPts.length; i++)
+    enemies.push(mkCreature(spawnPts[i], kinds[i % kinds.length]));
+
+  return {
+    len: LEN,
+    type: 'killgate',     // cleared by reaching kill-count, not a position gate
+    killGoal: 20,
+    gateX: LEN - 160,    // gate spawns visually but is locked until killGoal met
+    bgKey: 'bg3',
+    label: 'STAGE 2-2 · DESERT SWARM',
+  };
+}
+
+function buildStage_2_3() {
+  const LEN = 1600;
+  // Clean boss arena: oasis canyon, a couple of rocky ledges
+  const platData = [
+    [340,  GND - 72, 120],
+    [1000, GND - 72, 120],
+  ];
+  for (const [x, y, w] of platData) platforms.push({ x, y, w, h: 22 });
+
+  return {
+    len: LEN, type: 'boss',
+    bgKey: 'bg1',
+    label: 'STAGE 2-3 · CANYON — MINI-MAUSI',
+  };
+}
+
+/* ── Mini-Mausi-Chreno'bellow — Level 2 boss ─────────────────────────────
+   Sprite sheets: 128x64 per frame (horizontal strips, converted from grid).
+   The character content fills most of its 128x64 canvas, so we draw at
+   a scale that makes it roughly equal to the hero's 96px height: 64 * 1.5 = 96px.
+   Boss uses a varied attack rotation across 5 distinct combo animations. ── */
+const MM_SCALE = 1.5;    // 64px tall canvas → 96px on-screen = same as hero
+const MM_FW = 128, MM_FH = 64;
+
+function mkMiniMausi() {
+  return {
+    x: curStageDef.len - 380, y: GND - MM_FH * MM_SCALE,
+    w: 56, h: MM_FH * MM_SCALE,    // hitbox: slightly narrower than full canvas
+    drawW: MM_FW * MM_SCALE, drawH: MM_FH * MM_SCALE,
+    vx: 0, vy: 0, face: -1,
+    hp: 500 + level * 80, maxHp: 500 + level * 80,
+    dir: -1, spd: 1.4 + level * 0.15,
+    phase: 0,
+    alive: true, dying: false, dyingTimer: 0,
+    // Animation bank
+    spr: {
+      idle:         spr('boss_mm_idle',         MM_FW, MM_FH, 8,  6),
+      run:          spr('boss_mm_run',          MM_FW, MM_FH, 8,  12),
+      hurt:         spr('boss_mm_hurt',         MM_FW, MM_FH, 4,  10, false),
+      death:        spr('boss_mm_death',        MM_FW, MM_FH, 4,  6,  false),
+      jump:         spr('boss_mm_jump',         MM_FW, MM_FH, 8,  10),
+      roll:         spr('boss_mm_roll',         MM_FW, MM_FH, 4,  12, false),
+      slide:        spr('boss_mm_slide',        MM_FW, MM_FH, 12, 12, false),
+      attack1:      spr('boss_mm_attack1',      MM_FW, MM_FH, 8,  14, false),
+      attack2:      spr('boss_mm_attack2',      MM_FW, MM_FH, 8,  14, false),
+      attack3:      spr('boss_mm_attack3',      MM_FW, MM_FH, 8,  14, false),
+      attack4:      spr('boss_mm_attack4',      MM_FW, MM_FH, 8,  14, false),
+      attack5:      spr('boss_mm_attack5',      MM_FW, MM_FH, 8,  14, false),
+      crouch_idle:  spr('boss_mm_crouch_idle',  MM_FW, MM_FH, 8,  6),
+      crouch_attack:spr('boss_mm_crouch_attack',MM_FW, MM_FH, 8,  14, false),
+      attack_air:   spr('boss_mm_attack_air',   MM_FW, MM_FH, 8,  14, false),
+    },
+    curSpr: null, state: 'idle',
+    atkCd: 0, atkIdx: 0,     // cycles through attack1→attack5 in order
+    jumpCd: 0,               // cooldown before next jump attack
+    crouchCd: 0,             // cooldown before next crouch sweep
+    meleeCd: 0,
+    isAirborne: false,
+    onGnd: true,
+  };
+}
+
 const STAGE_BUILDERS = {
   '1-1': buildStage_1_1,
   '1-2': buildStage_1_2,
   '1-3': buildStage_1_3,
+  '2-1': buildStage_2_1,
+  '2-2': buildStage_2_2,
+  '2-3': buildStage_2_3,
 };
 
 let curStageDef = null; // { len, type, gateX?, label }
@@ -370,7 +569,12 @@ function hurtEnemy(e, dmg) {
   if (e.hp <= 0) {
     e.alive = false; e.dying = true;
     e.curSpr = e.spr.death; e.spr.death.reset();
-    score += e.type === 'cyborg' ? 300 : 150;
+    if (e.isCreature) {
+      const tierScore = { medusa: 350, jinn: 300, demon: 280, small_dragon: 200, lizard: 150 };
+      score += tierScore[e.kind] || 150;
+    } else {
+      score += e.type === 'cyborg' ? 300 : 150;
+    }
     combo++; comboT = 90; shake = 3;
     killCount++;
     explodeAt(e.x + e.w / 2, e.y + e.h / 2, 25);
@@ -383,14 +587,33 @@ function hurtBoss(dmg) {
   if (!boss || !boss.alive) return;
   boss.hp -= dmg; shake = 5;
   fx(boss.x + boss.w / 2, boss.y + boss.h / 2, '#f80', 6);
+
+  // Flash hurt animation if available
+  if (boss.spr && boss.spr.hurt && level === 2) {
+    boss.spr.hurt.reset();
+    boss.state = 'hurt';
+  }
+
   if (boss.hp <= 0) {
     boss.alive = false;
-    score += 6000;
-    boss.dying = true; boss.dyingTimer = 70;
-    explodeAt(boss.x + boss.w / 2, boss.y + boss.h / 2, 70);
-    setTimeout(() => explodeAt(boss.x + 20, boss.y + 20, 50), 250);
-    setTimeout(() => explodeAt(boss.x + boss.w - 20, boss.y + 40, 60), 500);
-    setTimeout(() => explodeAt(boss.x + boss.w / 2, boss.y + 60, 80), 800);
+    boss.dying = true;
+    boss.dyingTimer = 80;
+    if (level === 2) {
+      // Mini-Mausi has a death animation — play it + stagger explosions
+      score += 8000;
+      if (boss.spr && boss.spr.death) { boss.spr.death.reset(); boss.state = 'death'; }
+      explodeAt(boss.x + boss.w / 2, boss.y + boss.h / 2, 50);
+      setTimeout(() => explodeAt(boss.x + 10, boss.y + 10, 40), 200);
+      setTimeout(() => explodeAt(boss.x + boss.w, boss.y + 30, 45), 400);
+      setTimeout(() => explodeAt(boss.x + boss.w / 2, boss.y + 50, 60), 700);
+    } else {
+      // Cyprus-Cocopta: no death anim, bigger particle explosion
+      score += 6000;
+      explodeAt(boss.x + boss.w / 2, boss.y + boss.h / 2, 70);
+      setTimeout(() => explodeAt(boss.x + 20, boss.y + 20, 50), 250);
+      setTimeout(() => explodeAt(boss.x + boss.w - 20, boss.y + 40, 60), 500);
+      setTimeout(() => explodeAt(boss.x + boss.w / 2, boss.y + 60, 80), 800);
+    }
     updateHUD();
   }
 }
@@ -440,6 +663,25 @@ function updatePlayer() {
   if (p.djumpTimer > 0) p.djumpTimer--;
 
   if (p.state === 'death') { p.spr.death.update(); if (p.spr.death.done) playerDie(); return; }
+
+  // Medusa petrify: player is frozen solid — no movement, no jump, no
+  // shooting/attacking — for the duration. Gravity/ground collision still
+  // applies so a petrified player standing on a platform doesn't float, but
+  // they're a sitting target. Camera and animation hold in place.
+  if (p.petrified > 0) {
+    p.petrified--;
+    p.vx = 0;
+    p.vy = Math.min(p.vy + GRAV, MAXFALL);
+    p.y += p.vy;
+    for (const pl of platforms) {
+      if (p.vy >= 0 && p.y + p.h > pl.y && p.y + p.h - p.vy <= pl.y + 10
+          && p.x + p.w - 8 > pl.x && p.x + 8 < pl.x + pl.w) {
+        p.y = pl.y - p.h; p.vy = 0; p.onGnd = true;
+      }
+    }
+    if (p.y + p.h >= GND) { p.y = GND - p.h; p.vy = 0; p.onGnd = true; }
+    return;
+  }
 
   if (p.fallingToDeath) {
     p.vy = Math.min(p.vy + GRAV, MAXFALL);
@@ -529,6 +771,13 @@ function updatePlayer() {
   if (curStageDef.type === 'gate' && !stageClearedPending && p.x >= curStageDef.gateX) {
     stageClearedPending = true;
     setTimeout(stageClear, 400);
+  }
+  // Kill-gate: 20 kills unlock the exit; walking through after that clears stage
+  if (curStageDef.type === 'killgate' && !stageClearedPending) {
+    if (killCount >= curStageDef.killGoal && p.x >= curStageDef.gateX) {
+      stageClearedPending = true;
+      setTimeout(stageClear, 400);
+    }
   }
 }
 
@@ -640,6 +889,167 @@ function updateEnemies() {
   }
 }
 
+/* ── Desert creature AI/combat (Level 2) ─────────────────────────────────── */
+function updateCreatures() {
+  if (!player) return;
+  const p = player;
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (!e.isCreature) continue;
+    const sx = e.x - camX;
+    if (sx < -300 || sx > W + 300) continue;
+
+    if (e.dying) { e.curSpr.update(); if (e.curSpr.done) enemies.splice(i, 1); continue; }
+    if (!e.alive) continue;
+    if (e.hitF > 0) e.hitF--;
+
+    const dx = p.x - e.x, dist = Math.abs(dx);
+    if (dist < e.alertR) e.alert = true;
+    if (!e.alert) continue;
+    e.face = dx > 0 ? 1 : -1;
+
+    // ── Medusa: petrify special. When in range and off cooldown, she winds
+    //    up the Stone animation; on completion, the player is petrified
+    //    (frozen) for a short window — a real "don't get close" threat. ──
+    if (e.archetype === 'medusa') {
+      if (e.stoneCharging) {
+        e.stoneTimer--;
+        e.vx = 0;
+        if (e.stoneTimer <= 0) {
+          e.stoneCharging = false;
+          if (dist < 220 && p.inv <= 0) {
+            p.petrified = 110; // ~1.8s frozen
+            fx(p.x + p.w / 2, p.y + p.h / 2, '#8f8', 10);
+          }
+          e.atkCd = 220; // long cooldown after a petrify attempt
+        }
+      } else {
+        e.aiT--;
+        if (e.aiT <= 0) { e.aiT = 25 + Math.random() * 25; e.moveDir = dist > 110 ? e.face : 0; }
+        e.vx = e.moveDir * e.speed;
+        e.atkCd--;
+        if (e.atkCd <= 0 && dist < 260) {
+          e.stoneCharging = true; e.stoneTimer = e.spr.stone.fc * (60 / e.spr.stone.fps);
+          setState(e, 'stone');
+        }
+        // Regular melee bite if player gets in close while not charging
+        e.atkTimer > 0 && e.atkTimer--;
+        if (dist < 70 && e.atkTimer <= 0) {
+          e.atkTimer = 24;
+          if (p.inv <= 0) hurtPlayer(10);
+        }
+      }
+    }
+    // ── Jinn: flies, keeps distance, fires magic bolts (sniper-style) ──
+    else if (e.archetype === 'sniper') {
+      e.aiT--;
+      if (e.aiT <= 0) {
+        e.aiT = 30 + Math.random() * 25;
+        if (dist < 180) e.moveDir = -e.face;
+        else if (dist > 340) e.moveDir = e.face;
+        else e.moveDir = 0;
+      }
+      e.vx = e.moveDir * e.speed;
+      // Jinn floats — gentle vertical bob instead of gravity-locked to ground
+      e.floatT = (e.floatT || 0) + 0.05;
+      e.y = GND - e.h - 30 - Math.sin(e.floatT) * 14;
+
+      e.rangedCd--;
+      if (e.rangedCd <= 0 && dist < 380) {
+        e.rangedCd = 70;
+        const ang = Math.atan2(p.y + 40 - (e.y + e.h / 2), p.x + 24 - (e.x + e.w / 2));
+        bullets.push({ x: e.x + e.w / 2, y: e.y + e.h / 2,
+          vx: Math.cos(ang) * 6.5, vy: Math.sin(ang) * 0.5,
+          isEnemy: true, life: 70, dmg: 14, magic: true });
+        e.rangedAnimTimer = e.spr.magic_attack.fc * (60 / e.spr.magic_attack.fps);
+      }
+    }
+    // ── small_dragon: fire-breather that holds a preferred 70-200px band,
+    //    advancing only when the player is further than that and backing
+    //    off slightly if the player closes in too tight — so it keeps
+    //    breathing fire instead of immediately rushing into melee. ──
+    else if (e.archetype === 'rusher' && e.cfg.hasRanged) {
+      e.rangedCd--;
+      const inFireBand = dist > 70 && dist < 200;
+      if (e.rangedAnimTimer > 0) {
+        e.moveDir = 0; // hold still while the breath animation plays
+      } else if (inFireBand && e.rangedCd <= 0) {
+        e.moveDir = 0;
+        e.rangedCd = 75;
+        bullets.push({ x: e.x + (e.face > 0 ? e.w : 0), y: e.y + e.h * 0.4,
+          vx: e.face * 5, vy: 0, isEnemy: true, life: 50, dmg: 12, fire: true });
+        const rangedSpr = e.spr[e.cfg.hasRanged];
+        e.rangedAnimTimer = rangedSpr.fc * (60 / rangedSpr.fps);
+      } else if (dist < 70) {
+        e.moveDir = -e.face; // too close — back off toward the fire-band
+      } else if (dist >= 200) {
+        e.moveDir = e.face; // too far — close in toward the fire-band
+      } else {
+        e.moveDir = 0; // in-band but on cooldown — hold position
+      }
+      e.vx = e.moveDir * e.speed;
+    }
+    // ── Plain rusher (no ranged option): always charge ──
+    else if (e.archetype === 'rusher') {
+      e.aiT--;
+      if (e.aiT <= 0) { e.aiT = 10 + Math.random() * 12; e.moveDir = dist > 50 ? e.face : 0; }
+      e.vx = e.moveDir * e.speed;
+    }
+    // ── demon / default: brawler ──
+    else {
+      e.aiT--;
+      if (e.aiT <= 0) { e.aiT = 25 + Math.random() * 30; e.moveDir = dist > 90 ? e.face : 0; }
+      e.vx = e.moveDir * e.speed;
+    }
+
+    // Physics (skip ground-lock for flying jinn, handled above)
+    if (e.archetype !== 'sniper') {
+      const nextX = e.x + e.vx;
+      if (isOverPit(nextX + e.w / 2, 2) && e.onGnd) { e.vx = 0; e.moveDir = 0; }
+      e.vy = Math.min(e.vy + GRAV, MAXFALL);
+      e.x += e.vx; e.y += e.vy;
+      e.onGnd = false;
+      for (const pl of platforms) {
+        if (e.vy >= 0 && e.y + e.h > pl.y && e.y + e.h - e.vy <= pl.y + 10
+            && e.x + e.w - 8 > pl.x && e.x + 8 < pl.x + pl.w) {
+          e.y = pl.y - e.h; e.vy = 0; e.onGnd = true;
+        }
+      }
+      if (!isOverPit(e.x + e.w / 2, 2) && e.y + e.h >= GND) {
+        e.y = GND - e.h; e.vy = 0; e.onGnd = true;
+      }
+    } else {
+      e.x += e.vx; // jinn x-movement only, y handled by float logic above
+    }
+
+    // Melee contact damage (brawler/rusher archetypes; medusa handled above;
+    // jinn is ranged-only and stays out of melee range by design)
+    if (e.archetype === 'brawler' || e.archetype === 'rusher') {
+      e.atkCd = e.atkCd === undefined ? 0 : e.atkCd;
+      if (e.atkTimer > 0) {
+        e.atkTimer--;
+      } else if (dist < (e.w + 30)) {
+        e.atkTimer = e.archetype === 'rusher' ? 26 : 34;
+        if (p.inv <= 0) hurtPlayer(e.archetype === 'rusher' ? 7 : 12);
+      }
+    }
+
+    // Animation state
+    if (e.rangedAnimTimer > 0) e.rangedAnimTimer--;
+    let nst;
+    if (e.archetype === 'medusa' && e.stoneCharging) nst = 'stone';
+    else if (e.rangedAnimTimer > 0 && e.archetype === 'sniper' && e.spr.magic_attack) nst = 'magic_attack';
+    else if (e.rangedAnimTimer > 0 && e.cfg.hasRanged && e.spr[e.cfg.hasRanged]) nst = e.cfg.hasRanged;
+    else if (e.atkTimer > 0 && e.spr.attack) nst = 'attack';
+    else if (Math.abs(e.vx) > 0.2 && e.spr[e.moveKey]) nst = e.moveKey;
+    else nst = 'idle';
+    if (nst !== e.state) { e.state = nst; e.spr[nst] && e.spr[nst].reset(); }
+    e.state = nst;
+    e.curSpr = e.spr[nst] || e.spr.idle;
+    e.curSpr.update();
+  }
+}
+
 function updateBoss() {
   if (!boss) return;
   const p = player; if (!p) return;
@@ -699,6 +1109,126 @@ function updateBoss() {
     hurtPlayer(10);
 }
 
+/* ── Mini-Mausi-Chreno'bellow AI ─────────────────────────────────────────
+   3-phase fight: the boss cycles through a repertoire of attack animations
+   (5 different combo-swings, plus jump-attack and crouch-sweep). Each phase
+   adds new attack patterns:
+   Phase 0: cycles attack1→attack3, simple approach
+   Phase 1: adds attack4, jump-attacks, faster
+   Phase 2: all 5 combos, crouch sweeps, fastest — and no melee cooldown ── */
+function updateMiniMausi() {
+  if (!boss) return;
+  const b = boss;
+
+  // Dying sequence runs even though alive=false — must check BEFORE the
+  // alive guard or the death countdown is unreachable.
+  if (b.dying) {
+    b.dyingTimer--;
+    b.y -= 0.3;
+    if (b.spr.death) b.spr.death.update();
+    if (b.dyingTimer <= 0) { boss = null; stageClear(); }
+    return;
+  }
+
+  if (!b.alive) return;
+  const p = player; if (!p) return;
+
+  const phase = b.hp < b.maxHp * 0.3 ? 2 : b.hp < b.maxHp * 0.65 ? 1 : 0;
+  b.phase = phase;
+  const spd = b.spd * (1 + phase * 0.4);
+
+  const dx = p.x - b.x, dist = Math.abs(dx);
+  b.face = dx < 0 ? -1 : 1;
+
+  // Determine if currently mid-attack animation (block movement during combos)
+  const atkKey = b.state;
+  const midAtk = atkKey.startsWith('attack') || atkKey === 'roll' ||
+                 atkKey === 'slide' || atkKey === 'attack_air' || atkKey === 'crouch_attack';
+  const atkDone = b.spr[atkKey] && b.spr[atkKey].done;
+
+  if (midAtk && !atkDone) {
+    // Hold position during combo, deal melee damage at peak frame
+    b.vx = 0;
+    if (b.spr[atkKey] && b.spr[atkKey].f === 4 && p.inv <= 0) {
+      const meleeDmg = phase === 2 ? 24 : phase === 1 ? 18 : 14;
+      if (rr(b.x - 60, b.y, b.w + 120, b.h, p.x + 8, p.y + 8, p.w - 16, p.h - 16))
+        hurtPlayer(meleeDmg);
+    }
+    b.spr[atkKey].update();
+    b.curSpr = b.spr[atkKey];
+    // Update physics even mid-attack so jump arc carries through
+    b.vy = Math.min(b.vy + GRAV, MAXFALL); b.y += b.vy;
+    if (b.y + b.h >= GND) { b.y = GND - b.h; b.vy = 0; b.isAirborne = false; }
+    return;
+  }
+
+  // Transition to idle if attack just finished
+  if (midAtk && atkDone) {
+    const restMs = phase === 2 ? 12 : phase === 1 ? 20 : 28;
+    b.atkCd = restMs; b.state = 'idle';
+  }
+
+  // Approach/retreat logic
+  if (dist > 200) {
+    b.dir = dx > 0 ? 1 : -1;
+    b.vx = b.dir * spd;
+  } else if (dist < 60) {
+    b.vx = -b.face * spd * 0.5; // slight back-step before next swing
+  } else {
+    b.vx = 0;
+  }
+
+  // Physics
+  b.vy = Math.min(b.vy + GRAV, MAXFALL);
+  b.x += b.vx; b.y += b.vy;
+  b.x = Math.max(curStageDef.len - 920, Math.min(b.x, curStageDef.len - b.w - 20));
+  if (b.y + b.h >= GND) { b.y = GND - b.h; b.vy = 0; b.isAirborne = false; b.onGnd = true; }
+  else { b.onGnd = false; }
+
+  // ── Attack selection ─────────────────────────────────────────────────────
+  b.atkCd--;
+  if (b.atkCd <= 0 && dist < 220) {
+    const roll = Math.random();
+
+    // Jump-attack (phase 1+)
+    if (phase >= 1 && b.jumpCd <= 0 && dist < 300 && roll < 0.25) {
+      b.vy = -10; b.isAirborne = true;
+      b.atkCd = phase === 2 ? 15 : 22;
+      b.jumpCd = 160;
+      b.spr.attack_air.reset(); b.state = 'attack_air';
+
+    // Crouch sweep (phase 2)
+    } else if (phase === 2 && b.crouchCd <= 0 && roll < 0.35) {
+      b.atkCd = 18;
+      b.crouchCd = 130;
+      b.spr.crouch_attack.reset(); b.state = 'crouch_attack';
+
+    // Standard combo attack — cycle through attack1→attack(3+phase)
+    } else {
+      const maxAtk = phase === 2 ? 5 : phase === 1 ? 4 : 3;
+      b.atkIdx = (b.atkIdx + 1) % maxAtk;
+      const atkName = `attack${b.atkIdx + 1}`;
+      b.atkCd = phase === 2 ? 14 : phase === 1 ? 20 : 28;
+      b.spr[atkName].reset(); b.state = atkName;
+    }
+  }
+
+  if (b.jumpCd > 0) b.jumpCd--;
+  if (b.crouchCd > 0) b.crouchCd--;
+
+  // Move anim
+  if (b.state === 'idle' || b.state === 'run') {
+    const nst = Math.abs(b.vx) > 0.3 ? 'run' : 'idle';
+    if (nst !== b.state) { b.state = nst; b.spr[nst].reset(); }
+    b.spr[b.state].update();
+    b.curSpr = b.spr[b.state];
+  }
+
+  // Touch damage always active
+  if (p.inv <= 0 && rr(b.x + 6, b.y + 6, b.w - 12, b.h - 12, p.x + 8, p.y + 8, p.w - 16, p.h - 16))
+    hurtPlayer(10);
+}
+
 function updateBullets() {
   const p = player;
   for (let i = bullets.length - 1; i >= 0; i--) {
@@ -754,13 +1284,20 @@ function updatePickups() {
 
 function checkBoss() {
   if (curStageDef.type !== 'boss' || bossSpawned) return;
-  bossSpawned = true; boss = mkBoss();
+  bossSpawned = true;
+  if (level === 1) { boss = mkBoss(); }
+  else if (level === 2) { boss = mkMiniMausi(); }
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
    DRAW
    ────────────────────────────────────────────────────────────────────────── */
 function drawBG() {
+  if (level === 2) { drawDesertBG(); return; }
+  drawRooftopBG();
+}
+
+function drawRooftopBG() {
   const IMG = window.IMG;
   const sky = IMG['bg_sky'];
   if (sky && sky.complete && sky.naturalWidth) {
@@ -790,7 +1327,101 @@ function drawBG() {
   }
 }
 
+/** Desert backgrounds (Level 2) use 5 hand-painted parallax planes per
+ *  variant. Stacking order back→front, with each plane's own scroll-speed
+ *  multiplier for a proper depth feel:
+ *    plan5 (sky gradient) → plan4 (clouds) → plan1 (far dunes)
+ *    → plan3 (mid rocks/dunes) → plan2 (near ground/foliage, front-most)
+ */
+const DESERT_PLANE_ORDER = [
+  { plane: 'plan5', speed: 0.00 },
+  { plane: 'plan4', speed: 0.05 },
+  { plane: 'plan1', speed: 0.12 },
+  { plane: 'plan3', speed: 0.22 },
+  { plane: 'plan2', speed: 0.38 },
+];
+
+function drawDesertBG() {
+  const IMG = window.IMG;
+  const bgKey = (curStageDef && curStageDef.bgKey) || 'bg2';
+
+  // Base fill in case any plane image hasn't loaded
+  ctx.fillStyle = '#d8c9a3'; ctx.fillRect(0, 0, W, H);
+
+  for (const { plane, speed } of DESERT_PLANE_ORDER) {
+    const img = IMG[`desert_${bgKey}_${plane}`];
+    if (!img || !img.complete || !img.naturalWidth) continue;
+    const dw = img.naturalWidth * (H / img.naturalHeight);
+    const ox = (-camX * speed) % dw;
+    for (let x = ox - dw; x < W + dw; x += dw)
+      ctx.drawImage(img, Math.round(x), 0, Math.round(dw), H);
+  }
+}
+
+const DESERT_SAND_COLOR = { bg1: '#d6bb83', bg2: '#c7a16d', bg3: '#b38757' };
+
 function drawGround() {
+  if (level === 2) { drawDesertGround(); return; }
+  drawRooftopGround();
+}
+
+function drawDesertGround() {
+  const bgKey = (curStageDef && curStageDef.bgKey) || 'bg2';
+  const sandColor = DESERT_SAND_COLOR[bgKey] || '#c7a16d';
+
+  // Ground fill colored to match the parallax art's own sand tones, so the
+  // procedural ground blends with the painted foreground instead of
+  // clashing with a mismatched tileset.
+  ctx.fillStyle = sandColor;
+  ctx.fillRect(0, GND, W, H - GND);
+  // Subtle darker band at the very top edge of the sand for a horizon line
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
+  ctx.fillRect(0, GND, W, 4);
+  // Light texture speckle (cheap dune ripple effect), skipped over pits
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  const s = Math.floor(camX / 24), e = Math.ceil((camX + W) / 24) + 1;
+  for (let t = s; t < e; t++) {
+    const worldX = t * 24;
+    if (isOverPit(worldX + 12, 0)) continue;
+    const sx = worldX - camX;
+    if (t % 3 === 0) ctx.fillRect(Math.round(sx), GND + 6 + (t % 5) * 4, 16, 2);
+  }
+
+  for (const pit of pits) {
+    const sx = pit.x - camX;
+    if (sx > W || sx + pit.w < 0) continue;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(Math.round(sx), GND, pit.w, H - GND);
+    ctx.fillStyle = '#ffcc00';
+    for (let yy = 0; yy < 3; yy++) {
+      ctx.fillRect(Math.round(sx), GND + yy * 8, 6, 4);
+      ctx.fillRect(Math.round(sx + pit.w - 6), GND + yy * 8, 6, 4);
+    }
+  }
+
+  for (const pl of platforms) {
+    const sx = pl.x - camX;
+    if (sx > W || sx + pl.w < 0) continue;
+    ctx.fillStyle = '#a8845a';
+    ctx.fillRect(Math.round(sx), pl.y, pl.w, pl.h);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.fillRect(Math.round(sx), pl.y, pl.w, 4);
+  }
+
+  if (curStageDef && curStageDef.type === 'gate') {
+    const gx = curStageDef.gateX - camX;
+    if (gx > -60 && gx < W + 60) {
+      ctx.fillStyle = stageClearedPending ? '#0f0a' : '#f5c518aa';
+      ctx.fillRect(Math.round(gx), GND - 90, 6, 90);
+      ctx.fillRect(Math.round(gx) + 40, GND - 90, 6, 90);
+      ctx.fillStyle = stageClearedPending ? '#0f0' : '#f5c518';
+      ctx.font = '7px "Press Start 2P",monospace'; ctx.textAlign = 'center';
+      ctx.fillText('EXIT', Math.round(gx) + 23, GND - 96); ctx.textAlign = 'left';
+    }
+  }
+}
+
+function drawRooftopGround() {
   const IMG = window.IMG;
   const ts  = IMG['tile_ground'];
   const bl  = IMG['tile_bldg'];
@@ -875,6 +1506,46 @@ function drawEnemies() {
     const sx = e.x - camX;
     if (sx < -200 || sx > W + 200) continue;
     if (e.hitF > 0 && Math.floor(e.hitF / 2) % 2 === 0) ctx.globalAlpha = 0.25;
+
+    if (e.isCreature) {
+      // Creature canvases are larger than their hitbox (padding around the
+      // art); center the drawn canvas on the hitbox horizontally, and align
+      // its bottom to the hitbox bottom so feet/base touch the ground.
+      // Position using the *currently playing* sprite's own native frame
+      // size — body anims (idle/walk/attack/hurt/death) share one canvas
+      // size, but special ranged anims (fire_attack/magic_attack) use a
+      // different native size, so we can't assume e.canvasSize here.
+      const drawSize = e.curSpr.fw * e.scale;
+      const drawX = sx + e.w / 2 - drawSize / 2;
+      const drawY = e.y + e.h - drawSize;
+      shadow(sx + e.w / 2, GND + 2, Math.max(18, e.w * 0.5));
+      e.curSpr.draw(ctx, drawX, drawY, e.face === -1, e.scale);
+      ctx.globalAlpha = 1;
+
+      if (e.alive && e.alert) {
+        const bw = 50, bx = sx + e.w / 2 - bw / 2, by = e.y - 12;
+        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(bx, by, bw, 5);
+        const hp = Math.max(0, e.hp / e.maxHp);
+        ctx.fillStyle = hp > 0.5 ? '#0c0' : hp > 0.25 ? '#fa0' : '#f00';
+        ctx.fillRect(bx, by, Math.round(bw * hp), 5);
+
+        // Archetype tag
+        const tag = { rusher: ['⚡', '#ff5050'], sniper: ['◎', '#50c8ff'], medusa: ['☗', '#8aff8a'] }[e.archetype];
+        if (tag) {
+          ctx.fillStyle = tag[1];
+          ctx.font = '6px "Press Start 2P",monospace'; ctx.textAlign = 'center';
+          ctx.fillText(tag[0], sx + e.w / 2, by - 4); ctx.textAlign = 'left';
+        }
+        // Medusa stone-charge warning
+        if (e.stoneCharging) {
+          ctx.fillStyle = '#8aff8a';
+          ctx.font = '6px "Press Start 2P",monospace'; ctx.textAlign = 'center';
+          ctx.fillText('PETRIFYING!', sx + e.w / 2, by - 12); ctx.textAlign = 'left';
+        }
+      }
+      continue;
+    }
+
     shadow(sx + 48, GND + 2, 28);
     e.curSpr.draw(ctx, sx, e.y, e.face === -1, 2);
     ctx.globalAlpha = 1;
@@ -900,11 +1571,16 @@ function drawEnemies() {
 
 function drawBossSprite() {
   if (!boss) return;
+  if (level === 2) { drawMiniMausi(); return; }
+  drawCyprusCocopta();
+}
+
+function drawCyprusCocopta() {
+  if (!boss) return;
   const sx = boss.x - camX;
   if (sx < -300 || sx > W + 300) return;
 
   if (boss.dying) ctx.globalAlpha = Math.max(0, boss.dyingTimer / 70);
-
   shadow(sx + boss.w / 2, GND + 4, 50, 9);
   if (boss.curSpr) {
     const drawX = sx - (boss.drawW - boss.w) / 2;
@@ -927,10 +1603,51 @@ function drawBossSprite() {
   }
 }
 
+function drawMiniMausi() {
+  const b = boss; if (!b) return;
+  const sx = b.x - camX;
+  if (sx < -300 || sx > W + 300) return;
+
+  if (b.dying) ctx.globalAlpha = Math.max(0, b.dyingTimer / 70);
+
+  shadow(sx + b.w / 2, GND + 3, 42, 8);
+  if (b.curSpr) {
+    // Center the draw canvas on the hitbox, bottom-align to feet
+    const drawX = sx + b.w / 2 - b.drawW / 2;
+    const drawY = b.y + b.h - b.drawH;
+    b.curSpr.draw(ctx, drawX, drawY, b.face === -1, MM_SCALE);
+  }
+  ctx.globalAlpha = 1;
+
+  if (!b.dying) {
+    const bw = W - 100, bx = 50, by = H - 22;
+    ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(bx - 2, by - 2, bw + 4, 14);
+    ctx.fillStyle = '#1a0a00'; ctx.fillRect(bx, by, bw, 10);
+    const pct = Math.max(0, b.hp / b.maxHp);
+    ctx.fillStyle = b.phase === 2 ? '#f00' : b.phase === 1 ? '#fa0' : '#a00';
+    ctx.fillRect(bx, by, Math.round(bw * pct), 10);
+    ctx.fillStyle = 'rgba(255,100,0,0.2)'; ctx.fillRect(bx, by, bw, 4);
+    ctx.font = '7px "Press Start 2P",monospace';
+    ctx.fillStyle = '#ff8844'; ctx.textAlign = 'center';
+    ctx.fillText("★  MINI-MAUSI-CHRENO'BELLOW  ★", W / 2, by - 5);
+    ctx.textAlign = 'left';
+  }
+}
+
 function drawBullets() {
   for (const b of bullets) {
     const sx = Math.round(b.x - camX), sy = Math.round(b.y);
-    if (b.isEnemy) {
+    if (b.fire) {
+      // Fire breath — orange-yellow fireball with glow
+      ctx.fillStyle = '#ff6600'; ctx.fillRect(sx - 6, sy - 4, 14, 7);
+      ctx.fillStyle = '#ffcc00'; ctx.fillRect(sx - 4, sy - 2, 9, 4);
+      ctx.fillStyle = 'rgba(255,100,0,0.3)'; ctx.fillRect(sx - 10, sy - 6, 20, 11);
+    } else if (b.magic) {
+      // Jinn magic bolt — blue-purple with crackle
+      ctx.fillStyle = '#aa44ff'; ctx.fillRect(sx - 5, sy - 5, 10, 10);
+      ctx.fillStyle = '#cc99ff'; ctx.fillRect(sx - 3, sy - 3, 6, 6);
+      ctx.fillStyle = 'rgba(150,0,255,0.3)'; ctx.fillRect(sx - 8, sy - 8, 16, 16);
+    } else if (b.isEnemy) {
       ctx.fillStyle = '#f44'; ctx.fillRect(sx - 5, sy - 3, 11, 5);
       ctx.fillStyle = '#ff0'; ctx.fillRect(sx - 3, sy - 1, 7, 3);
     } else {
@@ -1077,9 +1794,12 @@ function loop(ts) {
   lastTs = ts; frameN++;
 
   if (running) {
-    updatePlayer(); updateEnemies();
+    updatePlayer(); updateEnemies(); updateCreatures();
     checkBoss();
-    if (boss) updateBoss();
+    if (boss) {
+      if (level === 2) updateMiniMausi();
+      else updateBoss();
+    }
     updateBullets(); updateParticles(); updatePickups();
     if (comboT > 0) comboT--; else combo = 0;
     if (frameN % 3 === 0) updateHUD();
@@ -1117,8 +1837,24 @@ function loop(ts) {
   if (curStageDef && curStageDef.type === 'boss' && boss && boss.alive && !boss.dying && boss.x - camX > W + 50) {
     if (Math.floor(frameN / 15) % 2 === 0) {
       ctx.font = '9px "Press Start 2P",monospace'; ctx.fillStyle = '#f44'; ctx.textAlign = 'center';
-      ctx.fillText('⚠  CYPRUS-COCOPTA INCOMING!  ⚠', W / 2, 38); ctx.textAlign = 'left';
+      const warnName = level === 2 ? "MINI-MAUSI INCOMING!" : "CYPRUS-COCOPTA INCOMING!";
+      ctx.fillText(`⚠  ${warnName}  ⚠`, W / 2, 38); ctx.textAlign = 'left';
     }
+  }
+  // Kill-gate counter for stage 2-2
+  if (curStageDef && curStageDef.type === 'killgate' && !stageClearedPending) {
+    const remaining = Math.max(0, curStageDef.killGoal - killCount);
+    const unlocked = remaining === 0;
+    ctx.font = '8px "Press Start 2P",monospace';
+    ctx.fillStyle = unlocked ? '#0f0' : '#f5c518';
+    ctx.textAlign = 'center';
+    if (unlocked) {
+      if (Math.floor(frameN / 20) % 2 === 0)
+        ctx.fillText('★ GATE UNLOCKED — ADVANCE! →', W / 2, 38);
+    } else {
+      ctx.fillText(`KILL COUNT: ${killCount} / ${curStageDef.killGoal}`, W / 2, 38);
+    }
+    ctx.textAlign = 'left';
   }
   if (curStageDef && curStageDef.type === 'gate' && !stageClearedPending && player) {
     const distToGate = curStageDef.gateX - player.x;

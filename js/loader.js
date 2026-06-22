@@ -67,6 +67,81 @@ const ASSET_MANIFEST = {
   boss_cc_run:    'assets/bosses/cyprus_cocopta/run.png',
   boss_cc_attack: 'assets/bosses/cyprus_cocopta/attack.png',
   boss_cc_hurt:   'assets/bosses/cyprus_cocopta/hurt.png',
+
+  // ── Boss: Mini-Mausi-Chreno'bellow (Level 2 boss) ───────────────────────────
+  boss_mm_idle:          'assets/bosses/mini_mausi/idle.png',
+  boss_mm_run:           'assets/bosses/mini_mausi/run.png',
+  boss_mm_hurt:          'assets/bosses/mini_mausi/hurt.png',
+  boss_mm_death:         'assets/bosses/mini_mausi/death.png',
+  boss_mm_jump:          'assets/bosses/mini_mausi/jump.png',
+  boss_mm_roll:          'assets/bosses/mini_mausi/roll.png',
+  boss_mm_slide:         'assets/bosses/mini_mausi/slide.png',
+  boss_mm_pray:          'assets/bosses/mini_mausi/pray.png',
+  boss_mm_crouch_idle:   'assets/bosses/mini_mausi/crouch_idle.png',
+  boss_mm_crouch_attack: 'assets/bosses/mini_mausi/crouch_attack.png',
+  boss_mm_attack_air:    'assets/bosses/mini_mausi/attack_air.png',
+  boss_mm_climb:         'assets/bosses/mini_mausi/climb.png',
+  boss_mm_hanging:       'assets/bosses/mini_mausi/hanging.png',
+  boss_mm_attack1:       'assets/bosses/mini_mausi/attack1.png',
+  boss_mm_attack2:       'assets/bosses/mini_mausi/attack2.png',
+  boss_mm_attack3:       'assets/bosses/mini_mausi/attack3.png',
+  boss_mm_attack4:       'assets/bosses/mini_mausi/attack4.png',
+  boss_mm_attack5:       'assets/bosses/mini_mausi/attack5.png',
+
+  // ── Desert creatures (Level 2 enemies) ──────────────────────────────────────
+  lizard_idle:    'assets/creatures/lizard/idle.png',
+  lizard_walk:    'assets/creatures/lizard/walk.png',
+  lizard_attack:  'assets/creatures/lizard/attack.png',
+  lizard_hurt:    'assets/creatures/lizard/hurt.png',
+  lizard_death:   'assets/creatures/lizard/death.png',
+
+  small_dragon_idle:        'assets/creatures/small_dragon/idle.png',
+  small_dragon_walk:        'assets/creatures/small_dragon/walk.png',
+  small_dragon_attack:      'assets/creatures/small_dragon/attack.png',
+  small_dragon_fire_attack: 'assets/creatures/small_dragon/fire_attack.png',
+  small_dragon_hurt:        'assets/creatures/small_dragon/hurt.png',
+  small_dragon_death:       'assets/creatures/small_dragon/death.png',
+
+  demon_idle:   'assets/creatures/demon/idle.png',
+  demon_walk:   'assets/creatures/demon/walk.png',
+  demon_attack: 'assets/creatures/demon/attack.png',
+  demon_hurt:   'assets/creatures/demon/hurt.png',
+  demon_death:  'assets/creatures/demon/death.png',
+
+  jinn_idle:         'assets/creatures/jinn/idle.png',
+  jinn_flight:        'assets/creatures/jinn/flight.png',
+  jinn_attack:        'assets/creatures/jinn/attack.png',
+  jinn_magic_attack:  'assets/creatures/jinn/magic_attack.png',
+  jinn_hurt:          'assets/creatures/jinn/hurt.png',
+  jinn_death:         'assets/creatures/jinn/death.png',
+
+  medusa_idle:   'assets/creatures/medusa/idle.png',
+  medusa_walk:   'assets/creatures/medusa/walk.png',
+  medusa_attack: 'assets/creatures/medusa/attack.png',
+  medusa_stone:  'assets/creatures/medusa/stone.png',
+  medusa_hurt:   'assets/creatures/medusa/hurt.png',
+  medusa_death:  'assets/creatures/medusa/death.png',
+
+  // ── Desert backgrounds (3 variants, 5 parallax layers each) ─────────────────
+  // Layer order back→front: plan5 (sky) < plan4 (clouds) < plan1 (far dunes)
+  // < plan3 (mid rocks/dunes) < plan2 (near ground/foliage, front-most)
+  desert_bg1_plan1: 'assets/bg_desert/bg1/plan1.png',
+  desert_bg1_plan2: 'assets/bg_desert/bg1/plan2.png',
+  desert_bg1_plan3: 'assets/bg_desert/bg1/plan3.png',
+  desert_bg1_plan4: 'assets/bg_desert/bg1/plan4.png',
+  desert_bg1_plan5: 'assets/bg_desert/bg1/plan5.png',
+
+  desert_bg2_plan1: 'assets/bg_desert/bg2/plan1.png',
+  desert_bg2_plan2: 'assets/bg_desert/bg2/plan2.png',
+  desert_bg2_plan3: 'assets/bg_desert/bg2/plan3.png',
+  desert_bg2_plan4: 'assets/bg_desert/bg2/plan4.png',
+  desert_bg2_plan5: 'assets/bg_desert/bg2/plan5.png',
+
+  desert_bg3_plan1: 'assets/bg_desert/bg3/plan1.png',
+  desert_bg3_plan2: 'assets/bg_desert/bg3/plan2.png',
+  desert_bg3_plan3: 'assets/bg_desert/bg3/plan3.png',
+  desert_bg3_plan4: 'assets/bg_desert/bg3/plan4.png',
+  desert_bg3_plan5: 'assets/bg_desert/bg3/plan5.png',
 };
 
 // Gun icons 01–40

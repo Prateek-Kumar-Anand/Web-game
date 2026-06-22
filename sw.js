@@ -1,12 +1,11 @@
 'use strict';
 /**
- * IRON SLUG – Service Worker
- * Caches the app shell + all game assets so the game works fully
- * offline after the first successful load (handy for Android,
- * spotty connections, or "Add to Home Screen" installs).
+ * IRON SLUG – Service Worker v3
+ * Caches app shell + all game assets for full offline play after first load.
+ * Level 2 desert backgrounds, creatures, and Mini-Mausi boss assets added.
  */
 
-const CACHE_NAME = 'iron-slug-v2';
+const CACHE_NAME = 'iron-slug-v3';
 
 const APP_SHELL = [
   '/',
@@ -24,6 +23,72 @@ const GAME_ASSETS = [
   '/assets/bg/layer1.png',
   '/assets/bg/layer2.png',
   '/assets/bg/sky.png',
+  '/assets/bg_desert/bg1/plan1.png',
+  '/assets/bg_desert/bg1/plan2.png',
+  '/assets/bg_desert/bg1/plan3.png',
+  '/assets/bg_desert/bg1/plan4.png',
+  '/assets/bg_desert/bg1/plan5.png',
+  '/assets/bg_desert/bg2/plan1.png',
+  '/assets/bg_desert/bg2/plan2.png',
+  '/assets/bg_desert/bg2/plan3.png',
+  '/assets/bg_desert/bg2/plan4.png',
+  '/assets/bg_desert/bg2/plan5.png',
+  '/assets/bg_desert/bg3/plan1.png',
+  '/assets/bg_desert/bg3/plan2.png',
+  '/assets/bg_desert/bg3/plan3.png',
+  '/assets/bg_desert/bg3/plan4.png',
+  '/assets/bg_desert/bg3/plan5.png',
+  '/assets/bosses/cyprus_cocopta/attack.png',
+  '/assets/bosses/cyprus_cocopta/hurt.png',
+  '/assets/bosses/cyprus_cocopta/idle.png',
+  '/assets/bosses/cyprus_cocopta/run.png',
+  '/assets/bosses/mini_mausi/attack.png',
+  '/assets/bosses/mini_mausi/attack1.png',
+  '/assets/bosses/mini_mausi/attack2.png',
+  '/assets/bosses/mini_mausi/attack3.png',
+  '/assets/bosses/mini_mausi/attack4.png',
+  '/assets/bosses/mini_mausi/attack5.png',
+  '/assets/bosses/mini_mausi/attack_air.png',
+  '/assets/bosses/mini_mausi/climb.png',
+  '/assets/bosses/mini_mausi/crouch_attack.png',
+  '/assets/bosses/mini_mausi/crouch_idle.png',
+  '/assets/bosses/mini_mausi/death.png',
+  '/assets/bosses/mini_mausi/hanging.png',
+  '/assets/bosses/mini_mausi/hurt.png',
+  '/assets/bosses/mini_mausi/idle.png',
+  '/assets/bosses/mini_mausi/jump.png',
+  '/assets/bosses/mini_mausi/pray.png',
+  '/assets/bosses/mini_mausi/roll.png',
+  '/assets/bosses/mini_mausi/run.png',
+  '/assets/bosses/mini_mausi/slide.png',
+  '/assets/creatures/demon/attack.png',
+  '/assets/creatures/demon/death.png',
+  '/assets/creatures/demon/hurt.png',
+  '/assets/creatures/demon/idle.png',
+  '/assets/creatures/demon/walk.png',
+  '/assets/creatures/jinn/attack.png',
+  '/assets/creatures/jinn/death.png',
+  '/assets/creatures/jinn/flight.png',
+  '/assets/creatures/jinn/hurt.png',
+  '/assets/creatures/jinn/idle.png',
+  '/assets/creatures/jinn/magic_attack.png',
+  '/assets/creatures/lizard/attack.png',
+  '/assets/creatures/lizard/death.png',
+  '/assets/creatures/lizard/hurt.png',
+  '/assets/creatures/lizard/idle.png',
+  '/assets/creatures/lizard/walk.png',
+  '/assets/creatures/medusa/attack.png',
+  '/assets/creatures/medusa/death.png',
+  '/assets/creatures/medusa/hurt.png',
+  '/assets/creatures/medusa/idle.png',
+  '/assets/creatures/medusa/stone.png',
+  '/assets/creatures/medusa/walk.png',
+  '/assets/creatures/small_dragon/attack.png',
+  '/assets/creatures/small_dragon/death.png',
+  '/assets/creatures/small_dragon/fire_attack.png',
+  '/assets/creatures/small_dragon/hurt.png',
+  '/assets/creatures/small_dragon/idle.png',
+  '/assets/creatures/small_dragon/walk.png',
   '/assets/guns/01.png',
   '/assets/guns/02.png',
   '/assets/guns/03.png',
@@ -107,15 +172,10 @@ const GAME_ASSETS = [
   '/assets/ui/hp_frame.png',
   '/assets/ui/hp_red.png',
   '/assets/ui/hp_yellow.png',
-  '/assets/bosses/cyprus_cocopta/idle.png',
-  '/assets/bosses/cyprus_cocopta/run.png',
-  '/assets/bosses/cyprus_cocopta/attack.png',
-  '/assets/bosses/cyprus_cocopta/hurt.png',
 ];
 
 const ALL_FILES = [...APP_SHELL, ...GAME_ASSETS];
 
-/* ── Install: pre-cache everything ──────────────────────────────────────── */
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
@@ -124,23 +184,18 @@ self.addEventListener('install', (event) => {
   );
 });
 
-/* ── Activate: clean up old cache versions ──────────────────────────────── */
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((names) =>
       Promise.all(
-        names
-          .filter((n) => n !== CACHE_NAME)
-          .map((n) => caches.delete(n))
+        names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n))
       )
     ).then(() => self.clients.claim())
   );
 });
 
-/* ── Fetch: cache-first, falling back to network, then caching the result ── */
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
-
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
@@ -152,7 +207,7 @@ self.addEventListener('fetch', (event) => {
           }
           return response;
         })
-        .catch(() => cached); // offline & not cached: just fail gracefully
+        .catch(() => cached);
     })
   );
 });
