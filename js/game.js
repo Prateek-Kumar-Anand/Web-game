@@ -128,7 +128,7 @@ function mkPlayer(cid) {
     hp: def.hp, maxHp: def.hp,
     ammo: 30, maxAmmo: 30,
     inv: 0,
-    atkCd: 0, atkTimer: 0, atkDmgDone: false, attacking: false,
+    atkCd: 0, atkTimer: 0, atkDmgDone: false, attacking: false, special: false, specialCd: 0,
     onGnd: false,
     jumped: false, djumped: false,
     crouching: false, djumpTimer: 0,
@@ -197,13 +197,16 @@ function mkEnemy(x, type, archetype) {
    hero (small_dragon/lizard = small grunts, demon = human-sized threat,
    jinn = floating medium humanoid, medusa = medium serpent-bodied). The
    hitbox is sized to the visible character, not the padded canvas, so combat
-   feels fair. */
+   feels fair. `footInset` is the measured transparent gap between the
+   character's feet and the bottom edge of its (body-anim) canvas — without
+   it, bottom-aligning the padded canvas to the ground leaves the visible
+   character floating above the floor. */
 const CREATURE_CFG = {
-  lizard:       { canvas: 256, scale: 1.111, hbW: 70, hbH: 60, archetype: 'rusher',  hasRanged: false },
-  small_dragon: { canvas: 128, scale: 1.486, hbW: 80, hbH: 55, archetype: 'rusher',  hasRanged: 'fire_attack' },
-  demon:        { canvas: 256, scale: 0.978, hbW: 56, hbH: 90, archetype: 'brawler', hasRanged: false },
-  jinn:         { canvas: 128, scale: 1.039, hbW: 40, hbH: 80, archetype: 'sniper',  hasRanged: 'magic_attack' },
-  medusa:       { canvas: 128, scale: 1.190, hbW: 50, hbH: 75, archetype: 'medusa',  hasRanged: false },
+  lizard:       { canvas: 256, scale: 1.111, hbW: 70, hbH: 60, archetype: 'rusher',  hasRanged: false,            footInset: 99 },
+  small_dragon: { canvas: 128, scale: 1.486, hbW: 80, hbH: 55, archetype: 'rusher',  hasRanged: 'fire_attack',    footInset: 46 },
+  demon:        { canvas: 256, scale: 0.978, hbW: 56, hbH: 90, archetype: 'brawler', hasRanged: false,            footInset: 69 },
+  jinn:         { canvas: 128, scale: 1.039, hbW: 40, hbH: 80, archetype: 'sniper',  hasRanged: 'magic_attack',   footInset: 16 },
+  medusa:       { canvas: 128, scale: 1.190, hbW: 50, hbH: 75, archetype: 'medusa',  hasRanged: false,            footInset: 30 },
 };
 
 /** Creature animation sets — keys map to loader.js asset names via
@@ -632,7 +635,7 @@ const BOSS_DRAW_SCALE = 1.0;
 const BOSS_FRAME = 96;
 
 function mkBoss() {
-  const drawH = BOSS_FRAME * BOSS_DRAW_SCALE; // ~115px, vs player's 96px
+  const drawH = BOSS_FRAME * BOSS_DRAW_SCALE; // 96px, matches player's 96px exactly
   const drawW = BOSS_FRAME * BOSS_DRAW_SCALE;
   return {
     x: curStageDef.len - 360, y: GND - drawH, w: 48, h: drawH,
@@ -659,6 +662,7 @@ function updatePlayer() {
   const p = player; if (!p) return;
   if (p.inv > 0) p.inv--;
   if (p.atkCd > 0) p.atkCd--;
+  if (p.specialCd > 0) p.specialCd--;
   if (p.shootCd > 0) p.shootCd--;
   if (p.djumpTimer > 0) p.djumpTimer--;
 
@@ -710,8 +714,8 @@ function updatePlayer() {
   }
   if (!wantsJump) p.jumped = false;
 
-  if (K.attack() && p.atkCd <= 0) {
-    p.atkCd = 16; p.attacking = true; p.atkTimer = 16; p.atkDmgDone = false;
+  if (K.attack() && p.atkCd <= 0 && !p.attacking) {
+    p.atkCd = 16; p.attacking = true; p.atkTimer = 16; p.atkDmgDone = false; p.special = false;
     if (p.ammo > 0) {
       p.ammo--;
       setState(p, p.djumpTimer > 0 ? 'attack2' : 'attack');
@@ -722,18 +726,36 @@ function updatePlayer() {
     } else { setState(p, 'punch'); }
     updateHUD();
   }
+
+  // Special attack (KeyC / on-screen SPL button) — a heavy charged strike
+  // on its own cooldown, independent of ammo. Reaches further and hits
+  // harder than the regular attack so it's worth saving for tough moments
+  // instead of spamming.
+  if (K.special() && p.specialCd <= 0 && !p.attacking) {
+    p.specialCd = 90; p.attacking = true; p.atkTimer = 20; p.atkDmgDone = false; p.special = true;
+    setState(p, 'attack2');
+    fx(p.x + p.w / 2, p.y + p.h / 2, '#ffe060', 10);
+    shake = Math.max(shake, 5);
+    updateHUD();
+  }
+
   if (p.attacking) {
     p.atkTimer--;
-    if (!p.atkDmgDone && p.atkTimer < 8) {
+    const dmgWindow = p.special ? 12 : 8;
+    if (!p.atkDmgDone && p.atkTimer < dmgWindow) {
       p.atkDmgDone = true;
-      const hbx = p.x + (p.face > 0 ? p.w * 2 : -60), hby = p.y + 24;
+      const reach   = p.special ? 100 : 60;
+      const dmgMul  = p.special ? 1.8 : 0.7;
+      const bossMul = p.special ? 1.2 : 0.5;
+      const hbx = p.x + (p.face > 0 ? p.w * 2 : -reach), hby = p.y + 16;
       for (const e of enemies) {
         if (!e.alive || e.dying) continue;
-        if (rr(hbx, hby, 60, 48, e.x, e.y, e.w, e.h)) hurtEnemy(e, p.def.atk * 0.7);
+        if (rr(hbx, hby, reach, 64, e.x, e.y, e.w, e.h)) hurtEnemy(e, p.def.atk * dmgMul);
       }
-      if (boss && !boss.dying && rr(hbx, hby, 60, 48, boss.x, boss.y, boss.w, boss.h)) hurtBoss(p.def.atk * 0.5);
+      if (boss && !boss.dying && rr(hbx, hby, reach, 64, boss.x, boss.y, boss.w, boss.h)) hurtBoss(p.def.atk * bossMul);
+      if (p.special) shake = Math.max(shake, 7);
     }
-    if (p.atkTimer <= 0) p.attacking = false;
+    if (p.atkTimer <= 0) { p.attacking = false; p.special = false; }
   }
 
   p.vy = Math.min(p.vy + GRAV, MAXFALL);
@@ -1516,8 +1538,10 @@ function drawEnemies() {
       // size, but special ranged anims (fire_attack/magic_attack) use a
       // different native size, so we can't assume e.canvasSize here.
       const drawSize = e.curSpr.fw * e.scale;
+      const isBaseCanvas = e.curSpr.fw === e.cfg.canvas;
+      const footPad = isBaseCanvas ? e.cfg.footInset * e.scale : 0;
       const drawX = sx + e.w / 2 - drawSize / 2;
-      const drawY = e.y + e.h - drawSize;
+      const drawY = e.y + e.h - drawSize + footPad;
       shadow(sx + e.w / 2, GND + 2, Math.max(18, e.w * 0.5));
       e.curSpr.draw(ctx, drawX, drawY, e.face === -1, e.scale);
       ctx.globalAlpha = 1;
@@ -1584,7 +1608,7 @@ function drawCyprusCocopta() {
   shadow(sx + boss.w / 2, GND + 4, 50, 9);
   if (boss.curSpr) {
     const drawX = sx - (boss.drawW - boss.w) / 2;
-    boss.curSpr.draw(ctx, drawX, boss.y, boss.face === -1, BOSS_DRAW_SCALE * 2);
+    boss.curSpr.draw(ctx, drawX, boss.y, boss.face === -1, BOSS_DRAW_SCALE);
   }
   ctx.globalAlpha = 1;
 
